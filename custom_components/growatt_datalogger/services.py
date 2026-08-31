@@ -1,12 +1,16 @@
-"""Services for reading and writing registers directly.
+"""Services: direct register access, and adopting another integration's history.
 
-These are the escape hatch. Register semantics beyond the documented banks vary by model
-and firmware, so rather than guessing and shipping entities for everything, the
-integration exposes the raw operations and lets someone who knows their device use them.
+The register services are the escape hatch. Register semantics beyond the documented
+banks vary by model and firmware, so rather than guessing and shipping entities for
+everything, the integration exposes the raw operations and lets someone who knows their
+device use them.
 
 ``write_register`` asks for confirmation outside a small allowlist. Writing the wrong
 holding register on a grid-tied inverter can misconfigure it, and a deliberate speed bump
 is cheap insurance against a typo in a script.
+
+``adopt_history`` is the migration path from whatever was reading the inverter before;
+``docs/MIGRATION.md`` has the whole story.
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ from typing import Any
 
 import voluptuous as vol
 from growatt_protocol import CommandTimeout, commands
+from homeassistant.const import ATTR_UNIT_OF_MEASUREMENT
 from homeassistant.core import (
     HomeAssistant,
     ServiceCall,
@@ -26,6 +31,7 @@ from homeassistant.core import (
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 
 from .const import DOMAIN
 from .hub import GrowattHub
@@ -36,6 +42,7 @@ SERVICE_READ_REGISTER = "read_register"
 SERVICE_WRITE_REGISTER = "write_register"
 SERVICE_WRITE_REGISTERS = "write_registers"
 SERVICE_SYNC_TIME = "sync_time"
+SERVICE_ADOPT_HISTORY = "adopt_history"
 
 ATTR_DEVICE_ID = "device_id"
 ATTR_TARGET = "target"
@@ -45,6 +52,9 @@ ATTR_VALUE = "value"
 ATTR_VALUES = "values"
 ATTR_START = "start_register"
 ATTR_CONFIRM = "confirm"
+ATTR_TARGET_ENTITY = "target_entity"
+ATTR_SOURCE_ENTITY = "source_entity_id"
+ATTR_DISCARD = "discard_target_statistics"
 
 TARGET_INVERTER = "inverter"
 TARGET_DATALOGGER = "datalogger"
@@ -88,6 +98,14 @@ _WRITE_MANY_SCHEMA = vol.Schema(
 )
 
 _SYNC_SCHEMA = vol.Schema({vol.Required(ATTR_DEVICE_ID): cv.string})
+
+_ADOPT_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_TARGET_ENTITY): cv.entity_id,
+        vol.Required(ATTR_SOURCE_ENTITY): cv.entity_id,
+        vol.Optional(ATTR_DISCARD, default=False): cv.boolean,
+    }
+)
 
 
 def _resolve(hass: HomeAssistant, device_id: str) -> tuple[GrowattHub, str]:
@@ -232,6 +250,104 @@ def async_register_services(hass: HomeAssistant) -> None:
                 f"The datalogger rejected the clock update (result {response.result})"
             )
 
+    async def _adopt_history(call: ServiceCall) -> ServiceResponse:
+        """Hand a Growatt entity the entity id of the one that used to read this inverter.
+
+        Statistics and history are keyed by entity id, not by entity, and Home Assistant
+        already migrates both when an entity is renamed. So the whole migration is one
+        rename: the new sensor takes the old sensor's id, and the Energy Dashboard,
+        every automation and every card go on pointing at something that exists.
+
+        The old entity has to be gone first -- an id can only have one owner -- which is
+        also what leaves its statistics behind to be picked up. Recorder refuses to move
+        the *target's* own series onto an id that already has one, and that refusal is
+        the desired outcome: the long series is kept and the new entity continues it.
+        What is left orphaned is the handful of days the target recorded under its own
+        id, which is exactly the period the source was recording in parallel.
+        """
+        from homeassistant.components.recorder import get_instance
+        from homeassistant.components.recorder.statistics import (
+            STATISTIC_UNIT_TO_UNIT_CONVERTER,
+            async_list_statistic_ids,
+        )
+
+        target: str = call.data[ATTR_TARGET_ENTITY]
+        source: str = call.data[ATTR_SOURCE_ENTITY]
+
+        registry = er.async_get(hass)
+        entry = registry.async_get(target)
+        if entry is None or entry.platform != DOMAIN:
+            raise ServiceValidationError(f"{target} is not a Growatt Datalogger entity")
+        if source == target:
+            raise ServiceValidationError(f"{target} already has that id")
+        if source.split(".")[0] != target.split(".")[0]:
+            raise ServiceValidationError(
+                f"{source} and {target} are in different domains. An entity can only "
+                "take an id from its own domain."
+            )
+        if registry.async_is_registered(source) or not hass.states.async_available(source):
+            raise ServiceValidationError(
+                f"{source} still exists. Delete the old integration -- or the YAML "
+                "entity -- first: an id has one owner, and its history is only free to "
+                "be adopted once nothing holds it."
+            )
+
+        if "recorder" not in hass.config.components:
+            raise HomeAssistantError("The recorder is not running, so there is no history to adopt")
+
+        # The target's unit has to be the one its statistics already compile in, not
+        # merely its native unit, because that is what recorder compares against. A
+        # mismatch it cannot convert does not fail loudly -- it silently stops compiling
+        # long-term statistics for the entity -- so it is worth refusing up front.
+        state = hass.states.get(target)
+        if state is None:
+            raise ServiceValidationError(
+                f"{target} has no state. A disabled entity cannot adopt anything."
+            )
+        target_unit = state.attributes.get(ATTR_UNIT_OF_MEASUREMENT)
+
+        found = {
+            meta["statistic_id"]: meta for meta in await async_list_statistic_ids(hass, {source})
+        }
+        if (source_meta := found.get(source)) is None:
+            raise ServiceValidationError(
+                f"No long-term statistics exist for {source}, so there is nothing to "
+                "adopt. Check the spelling against Developer tools > Statistics. To "
+                "reuse the id alone, rename the entity in its settings instead."
+            )
+
+        source_unit = source_meta["statistics_unit_of_measurement"]
+        if source_unit != target_unit:
+            converter = STATISTIC_UNIT_TO_UNIT_CONVERTER.get(source_unit)
+            if converter is None or converter is not STATISTIC_UNIT_TO_UNIT_CONVERTER.get(
+                target_unit
+            ):
+                raise ServiceValidationError(
+                    f"{source} recorded {source_unit} and {target} reports "
+                    f"{target_unit}, which are not convertible. Adopting the series "
+                    "would stop long-term statistics for this entity."
+                )
+
+        try:
+            registry.async_update_entity(target, new_entity_id=source)
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
+
+        _LOGGER.info("%s adopted the history of %s", target, source)
+
+        if call.data[ATTR_DISCARD]:
+            # Whatever the target compiled under its own id is now unreachable: no
+            # entity answers to that id any more. Dropping it is optional because it is
+            # still data, and Developer tools > Statistics can do it later by hand.
+            get_instance(hass).async_clear_statistics([target])
+
+        return {
+            "entity_id": source,
+            "previous_entity_id": target,
+            "statistics_unit_of_measurement": source_unit,
+            "orphaned_statistics": None if call.data[ATTR_DISCARD] else target,
+        }
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_READ_REGISTER,
@@ -254,6 +370,13 @@ def async_register_services(hass: HomeAssistant) -> None:
         supports_response=SupportsResponse.OPTIONAL,
     )
     hass.services.async_register(DOMAIN, SERVICE_SYNC_TIME, _sync_time, schema=_SYNC_SCHEMA)
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_ADOPT_HISTORY,
+        _adopt_history,
+        schema=_ADOPT_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
 
 
 def dt_now():

@@ -112,6 +112,24 @@
         }
       }
     },
+    "adopt_history": {
+      "name": "Adopt history",
+      "description": "Give a Growatt entity the entity ID of the sensor that used to read this inverter, so its history, its long-term statistics and everything pointing at it carry over. Delete the old integration first.",
+      "fields": {
+        "target_entity": {
+          "name": "Growatt entity",
+          "description": "The entity that should take over the old ID."
+        },
+        "source_entity_id": {
+          "name": "Old entity ID",
+          "description": "The entity ID the previous integration used. It must no longer exist; its recorded history stays behind and is what gets adopted."
+        },
+        "discard_target_statistics": {
+          "name": "Discard the Growatt entity's own statistics",
+          "description": "Delete the statistics this entity compiled under its old ID, which nothing can reach afterwards. They cover the period the old sensor was recording in parallel, so this normally loses nothing."
+        }
+      }
+    },
     "write_registers": {
       "name": "Write registers",
       "description": "Write a contiguous run of Modbus holding registers in a single operation. Use this when a value spans more than one register, or when several registers must change together: writing them one at a time leaves the inverter briefly holding a mix of old and new values.",

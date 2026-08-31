@@ -98,6 +98,24 @@ To undo it all, set the datalogger's server back to `server.growatt.com`.
 > **Note:** by default your inverter stops reporting to Growatt, so ShinePhone and
 > ShineServer stop updating. If you want both, see below.
 
+## Coming from another Growatt integration
+
+Your history comes with you. Home Assistant keys history and statistics by entity id, so
+handing a Growatt sensor the id its predecessor used carries years of Energy Dashboard
+data across, along with every automation and card that pointed at it:
+
+```yaml
+action: growatt_datalogger.adopt_history
+data:
+  target_entity: sensor.growatt_inverter_sml0examp2_output_energy_total
+  source_entity_id: sensor.growatt_lifetime_energy_output
+```
+
+You can also run the old integration alongside this one while you compare them, whether
+it read the Growatt cloud, Grott, or the inverter over Modbus.
+[**Migrating**](docs/MIGRATION.md) covers the order to do it in, which sensor matches
+which, and what to check once it is done.
+
 ## Keeping ShinePhone working
 
 Turn on **Also forward to the Growatt cloud** in the integration's options. Home Assistant

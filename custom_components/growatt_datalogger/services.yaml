@@ -68,6 +68,24 @@ sync_time:
         device:
           integration: growatt_datalogger
 
+adopt_history:
+  fields:
+    target_entity:
+      required: true
+      example: sensor.growatt_inverter_sml0examp2_output_energy_total
+      selector:
+        entity:
+          integration: growatt_datalogger
+    source_entity_id:
+      required: true
+      example: sensor.growatt_lifetime_energy_output
+      selector:
+        text:
+    discard_target_statistics:
+      default: false
+      selector:
+        boolean:
+
 write_registers:
   fields:
     device_id:

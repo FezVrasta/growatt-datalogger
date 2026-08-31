@@ -9,6 +9,12 @@
   No cloud account, no MQTT broker, no add-on, no Docker.
 </p>
 
+<p align="center">
+  <a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=FezVrasta&repository=growatt-datalogger&category=integration">
+    <img src="https://my.home-assistant.io/badges/hacs_repository.svg" alt="Open this repository in HACS">
+  </a>
+</p>
+
 ---
 
 Your Growatt datalogger normally uploads to Growatt's servers. This integration **is** a
@@ -35,10 +41,16 @@ for reading or writing any register.
 
 ## Install
 
-1. In HACS, add this repository as a custom repository (category: Integration), install
-   it, and restart Home Assistant.
-2. **Settings → Devices & services → Add integration → Growatt Datalogger.** The only
-   question is the port. Leave it at 5279.
+1. Open it in HACS, download it, and restart Home Assistant.
+
+   [![Open this repository in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=FezVrasta&repository=growatt-datalogger&category=integration)
+
+   Or add `https://github.com/FezVrasta/growatt-datalogger` as a custom repository by
+   hand, with category **Integration**.
+
+2. Add the integration. The only question is the port — leave it at 5279.
+
+   [![Add the Growatt Datalogger integration](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=growatt_datalogger)
 3. Point your datalogger at Home Assistant:
 
    **ShineLan / ShineLan-X** — open the datalogger's IP address in a browser and go to

@@ -72,10 +72,11 @@ directly.
    [![Add the Growatt Datalogger integration](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=growatt_datalogger)
 3. Point your datalogger at Home Assistant:
 
-   **ShineLan / ShineLan-X** — open the datalogger's IP address in a browser and go to
-   the network settings. Turn **domain-name resolution off**, set the server IP to your
-   Home Assistant machine, and the port to 5279. Then reboot the datalogger — without
-   that it keeps talking to the old server and nothing arrives.
+   **ShineLan / ShineLan-X** — open the datalogger's IP address in a browser and log in.
+   The default credentials are `admin` / `admin`. Go to the network settings, turn
+   **domain-name resolution off**, set the server IP to your Home Assistant machine, and
+   the port to 5279. Then reboot the datalogger — without that it keeps talking to the
+   old server and nothing arrives.
 
    **ShineWiFi-X / ShineWiFi-S** — in the ShinePhone app go to **Me → Datalogger
    configuration**, put the stick into hotspot mode, connect your phone to it, then in
@@ -83,6 +84,14 @@ directly.
 
 4. Wait for the next upload. A minute for most dataloggers, longer for some. The devices
    and sensors appear on their own.
+
+> **If ShinePhone asks for an installer code.** Registering a datalogger yourself, without
+> going through an installer, is gated behind a code in most countries. The gate follows
+> the region set on your account rather than where the hardware is, and Afghanistan is not
+> gated — set your region to Afghanistan, finish the setup, then set it back. That is the
+> **app account region**, which is a different setting from the inverter's country/grid
+> code. Leave the grid code alone: it sets the voltage and frequency limits the inverter
+> disconnects at, and those have to match your actual grid.
 
 To undo it all, set the datalogger's server back to `server.growatt.com`.
 

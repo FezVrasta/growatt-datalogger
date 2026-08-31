@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+*.egg-info/
+dist/
+build/
+.DS_Store
+
+# Raw, un-pseudonymised packet captures must never be committed: they contain
+# datalogger and inverter serial numbers. Use tools/capture.py, which redacts
+# them, and commit only the resulting fixtures under tests/fixtures/.
+captures/
+*.raw.jsonl

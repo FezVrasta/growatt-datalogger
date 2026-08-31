@@ -1,0 +1,32 @@
+[project]
+name = "growatt-datalogger"
+version = "0.1.0"
+description = "Home Assistant custom component that replaces the Growatt cloud server locally"
+requires-python = ">=3.13"
+# Intentionally empty: the integration ships with zero runtime dependencies.
+dependencies = []
+
+[dependency-groups]
+# Everything needed to run tests/protocol and tests/registers. Deliberately does
+# NOT include Home Assistant -- those suites must pass without it.
+protocol = ["pytest>=8", "hypothesis>=6"]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "hypothesis>=6",
+    "freezegun>=1.5",
+    "ruff>=0.8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# asyncio_mode is deliberately not set here: it is a pytest-asyncio option, and the
+# protocol suite must run in an environment where that plugin is absent. Async tests
+# added later carry an explicit @pytest.mark.asyncio.
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]

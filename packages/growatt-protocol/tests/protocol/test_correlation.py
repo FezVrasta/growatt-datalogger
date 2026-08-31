@@ -5,17 +5,16 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-
-from custom_components.growatt_datalogger.protocol import commands
-from custom_components.growatt_datalogger.protocol.errors import CommandTimeout
-from custom_components.growatt_datalogger.protocol.records import Frame
-from custom_components.growatt_datalogger.protocol.server import (
+from growatt_protocol import commands
+from growatt_protocol.errors import CommandTimeout
+from growatt_protocol.records import Frame
+from growatt_protocol.server import (
     GrowattServer,
     ServerConfig,
 )
-from custom_components.growatt_datalogger.protocol.session import Session
-from tests.fakes.datalogger import FakeDatalogger
-from tests.fakes.frames import build_frame
+from growatt_protocol.session import Session
+from growatt_protocol.testing import FakeDatalogger
+from growatt_protocol.testing.frames import build_frame
 
 pytestmark = pytest.mark.asyncio
 

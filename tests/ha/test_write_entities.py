@@ -5,21 +5,21 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from growatt_protocol.registers.base import Confidence
+from growatt_protocol.registers.writable import (
+    WRITABLE,
+    Encoding,
+    WriteKind,
+    for_profile,
+)
+from growatt_protocol.testing import FakeDatalogger
+from growatt_protocol.testing.frames import build_frame, build_group
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.growatt_datalogger.const import DOMAIN
-from custom_components.growatt_datalogger.registers.base import Confidence
-from custom_components.growatt_datalogger.registers.writable import (
-    WRITABLE,
-    Encoding,
-    WriteKind,
-    for_profile,
-)
-from tests.fakes.datalogger import FakeDatalogger
-from tests.fakes.frames import build_frame, build_group
 
 SERIAL = "GPG0EXAMP1"
 INVERTER = "SML0EXAMP2"

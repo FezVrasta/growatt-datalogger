@@ -5,15 +5,13 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-
-from custom_components.growatt_datalogger.protocol.relay import RelayConfig
-from custom_components.growatt_datalogger.protocol.server import (
+from growatt_protocol.relay import RelayConfig
+from growatt_protocol.server import (
     GrowattServer,
     ServerConfig,
 )
-from custom_components.growatt_datalogger.protocol.session import Record
-from tests.fakes.datalogger import FakeDatalogger
-from tests.fakes.upstream import FakeUpstream
+from growatt_protocol.session import Record
+from growatt_protocol.testing import FakeDatalogger, FakeUpstream
 
 pytestmark = pytest.mark.asyncio
 

@@ -7,15 +7,14 @@ reader gets wrong, so these tests drive both directions hard.
 from __future__ import annotations
 
 import pytest
-from hypothesis import given, settings
-from hypothesis import strategies as st
-
-from custom_components.growatt_datalogger.protocol.errors import FrameError
-from custom_components.growatt_datalogger.protocol.framing import (
+from growatt_protocol.errors import FrameError
+from growatt_protocol.framing import (
     Framer,
     frame_length,
 )
-from tests.fakes.frames import build_frame
+from growatt_protocol.testing.frames import build_frame
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 
 @pytest.mark.parametrize("protocol", [2, 5, 6])

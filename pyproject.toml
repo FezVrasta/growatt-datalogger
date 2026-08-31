@@ -1,24 +1,25 @@
 [project]
-name = "growatt-datalogger"
+name = "growatt-datalogger-integration"
 version = "0.1.0"
-description = "Home Assistant custom component that replaces the Growatt cloud server locally"
+description = "Home Assistant custom component for Growatt dataloggers"
 requires-python = ">=3.13"
-# Intentionally empty: the integration ships with zero runtime dependencies.
-dependencies = []
+# The integration itself declares its runtime requirement in manifest.json, which is
+# what Home Assistant reads. This block exists only so the repository is installable
+# for development.
+dependencies = ["growatt-protocol"]
 
 [dependency-groups]
-# Everything needed to run tests/protocol and tests/registers. These are test tools
-# only -- the integration itself declares no runtime dependencies at all, and
-# tests/test_purity.py enforces that by walking the source. Deliberately does NOT
-# include Home Assistant: those suites must pass without it.
-protocol = ["pytest>=8", "pytest-asyncio>=0.24", "hypothesis>=6"]
 dev = [
+    "growatt-protocol",
     "pytest>=8",
     "pytest-asyncio>=0.24",
     "hypothesis>=6",
-    "freezegun>=1.5",
+    "pytest-homeassistant-custom-component",
     "ruff>=0.8",
 ]
+
+[tool.uv.sources]
+growatt-protocol = { path = "packages/growatt-protocol", editable = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

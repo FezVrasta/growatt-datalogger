@@ -5,10 +5,9 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-
-from custom_components.growatt_datalogger.protocol.records import Frame, Function
-from custom_components.growatt_datalogger.protocol.session import Record, Session
-from tests.fakes.frames import build_data_record, build_frame, build_group
+from growatt_protocol.records import Frame, Function
+from growatt_protocol.session import Record, Session
+from growatt_protocol.testing.frames import build_data_record, build_frame, build_group
 
 pytestmark = pytest.mark.asyncio
 

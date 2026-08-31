@@ -6,9 +6,11 @@ A Home Assistant integration that **is** the Growatt server. Your datalogger upl
 straight to Home Assistant; nothing has to leave your network.
 
 - **No add-on, no Docker, no MQTT broker.** It is an integration, installed through HACS.
-- **No compiled dependencies.** Standard-library Python throughout — the CI job that runs
-  the protocol and register suites installs only `pytest`, `pytest-asyncio` and
-  `hypothesis`, and a test walks the source to prove it stays that way.
+- **No compiled dependencies.** The protocol lives in
+  [`growatt-protocol`](packages/growatt-protocol), a standalone package with an empty
+  dependency list — standard library only, no compiled extension, so it installs
+  anywhere Python runs. A test walks its source and fails on any import outside the
+  standard library.
 - **No DNS hijacking, no root, no privileged networking.** Dataloggers have a server
   address field; you point it at Home Assistant on TCP 5279.
 
@@ -164,20 +166,25 @@ from Protocol II; that has to be selected by hand.
 ## Layout
 
 ```
-custom_components/growatt_datalogger/
-  protocol/     wire protocol — no Home Assistant, no third-party imports
-  registers/    register meaning per inverter family — same constraint
-  brand/        icon, served by Home Assistant 2026.3+
-  *.py          the Home Assistant layer
-tests/
-  protocol/     ┐ run with only pytest, pytest-asyncio and hypothesis
-  registers/    ┘
-  ha/           needs pytest-homeassistant-custom-component
+packages/growatt-protocol/        the protocol, published to PyPI
+  src/growatt_protocol/
+    *.py                          framing, obfuscation, checksums, records, commands, server
+    registers/                    register meaning per inverter family
+    testing/                      fake datalogger and fake cloud, for anyone building on it
+  tests/                          runs with only pytest, pytest-asyncio and hypothesis
+
+custom_components/growatt_datalogger/   the Home Assistant layer, and nothing else
+  *.py                            config flow, hub, entities, services
+  brand/                          icon, served by Home Assistant 2026.3+
+tests/ha/                         needs pytest-homeassistant-custom-component
 ```
 
-`tests/test_purity.py` walks the AST of everything under `protocol/` and `registers/` and
-fails on any import outside the standard library. That is what makes the zero-dependency
-claim something the build checks rather than something the README asserts.
+The split is not cosmetic. Everything that knows about the wire is reusable by anyone
+talking to a Growatt datalogger, whether or not they run Home Assistant, and keeping it
+in its own package is what lets its dependency list be empty and stay that way —
+`packages/growatt-protocol/tests/test_purity.py` walks the AST of every module and fails
+on any import outside the standard library, and asserts the declared dependencies are
+empty. The integration depends on it the ordinary way, through `manifest.json`.
 
 ## Brand assets
 
@@ -199,14 +206,28 @@ This project is **not** derived from `johanmeijer/grott`, which carries no licen
 
 ```sh
 python3 -m venv .venv
+.venv/bin/pip install -e packages/growatt-protocol
 .venv/bin/pip install pytest pytest-asyncio hypothesis ruff pytest-homeassistant-custom-component
-.venv/bin/python -m pytest tests -q
+.venv/bin/python -m pytest tests -q          # the integration
 .venv/bin/ruff check . && .venv/bin/ruff format --check .
 ```
 
-To check the zero-dependency property the way CI does, in an environment without Home
-Assistant:
+The library stands on its own, and its suite is meant to be run in an environment with
+neither Home Assistant nor anything else installed:
 
 ```sh
-.venv/bin/python -m pytest tests/protocol tests/registers tests/test_purity.py -q
+cd packages/growatt-protocol && python -m pytest -q
 ```
+
+### Releasing
+
+`manifest.json` pins an exact version of `growatt-protocol`, and Home Assistant installs
+exactly that, so a release is two steps in order:
+
+1. Bump `version` in `packages/growatt-protocol/pyproject.toml` and push a
+   `growatt-protocol-v*` tag. The publish workflow builds and uploads to PyPI through
+   Trusted Publishing, so there is no token to store.
+2. Bump the pin in `custom_components/growatt_datalogger/manifest.json` to match.
+
+CI fails if the two disagree, because shipping a manifest that pins a version older than
+the code was written against would silently give every user the wrong library.

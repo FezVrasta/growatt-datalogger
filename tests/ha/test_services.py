@@ -6,14 +6,14 @@ import asyncio
 
 import pytest
 import voluptuous as vol
+from growatt_protocol.testing import FakeDatalogger
+from growatt_protocol.testing.frames import build_frame
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.growatt_datalogger.const import DOMAIN
-from tests.fakes.datalogger import FakeDatalogger
-from tests.fakes.frames import build_frame
 
 SERIAL = "GPG0EXAMP1"
 

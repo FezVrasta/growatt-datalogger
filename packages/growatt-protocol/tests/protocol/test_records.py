@@ -5,17 +5,16 @@ from __future__ import annotations
 from datetime import datetime
 
 import pytest
-
-from custom_components.growatt_datalogger.protocol.crc import check_crc
-from custom_components.growatt_datalogger.protocol.errors import RecordError
-from custom_components.growatt_datalogger.protocol.records import (
+from growatt_protocol.crc import check_crc
+from growatt_protocol.errors import RecordError
+from growatt_protocol.records import (
     Frame,
     Function,
     build_ack,
     build_ping_echo,
     parse_register_record,
 )
-from tests.fakes.frames import build_data_record, build_frame, build_group
+from growatt_protocol.testing.frames import build_data_record, build_frame, build_group
 
 # --------------------------------------------------------------------------------
 # Header

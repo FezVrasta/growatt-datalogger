@@ -23,19 +23,19 @@ identifier name, or file layout is reproduced here.
 
 | Component | Derived from | Licence | Notes |
 |---|---|---|---|
-| `protocol/crc.py` | CRC-16/MODBUS is a published algorithm (reflected polynomial `0xA001`, init `0xFFFF`). Implemented from the algorithm definition. | n/a — algorithm | Growatt appends the checksum big-endian, unlike Modbus RTU serial framing. Verified against the standard `"123456789"` → `0x4B37` vector. |
-| `protocol/crypt.py` | Protocol description in [nwf's Growatt protocol notes](https://www.ietfng.org/nwf/misc/growatt-protocol.html) (prose) and [`aaronjbrown/PyGrowatt`](https://github.com/aaronjbrown/PyGrowatt) | BSD-3-Clause | XOR with the repeating ASCII key `Growatt`, applied from byte offset 8 onward. |
-| `protocol/framing.py` | Frame-length rule from the header description in the same sources; reassembly logic is original. | BSD-3-Clause (concept) | |
-| `protocol/records.py` | Payload structure (serials, timestamp, register-group count, `(start, end)` group headers) from nwf's notes, [`aaronjbrown/PyGrowatt`](https://github.com/aaronjbrown/PyGrowatt) and [`akupila/wireshark-growatt`](https://github.com/akupila/wireshark-growatt); confirmed against the author's own captures. | BSD-3-Clause / MIT | |
-| `registers/*` | [`WouterTuinstra/Homeassistant-Growatt-Local-Modbus`](https://github.com/WouterTuinstra/Homeassistant-Growatt-Local-Modbus), which itself cites the Growatt specifications below. | **Apache-2.0** | See "Apache-2.0 notice" below. |
+| `growatt_protocol/crc.py` | CRC-16/MODBUS is a published algorithm (reflected polynomial `0xA001`, init `0xFFFF`). Implemented from the algorithm definition. | n/a — algorithm | Growatt appends the checksum big-endian, unlike Modbus RTU serial framing. Verified against the standard `"123456789"` → `0x4B37` vector. |
+| `growatt_protocol/crypt.py` | Protocol description in [nwf's Growatt protocol notes](https://www.ietfng.org/nwf/misc/growatt-protocol.html) (prose) and [`aaronjbrown/PyGrowatt`](https://github.com/aaronjbrown/PyGrowatt) | BSD-3-Clause | XOR with the repeating ASCII key `Growatt`, applied from byte offset 8 onward. |
+| `growatt_protocol/framing.py` | Frame-length rule from the header description in the same sources; reassembly logic is original. | BSD-3-Clause (concept) | |
+| `growatt_protocol/records.py` | Payload structure (serials, timestamp, register-group count, `(start, end)` group headers) from nwf's notes, [`aaronjbrown/PyGrowatt`](https://github.com/aaronjbrown/PyGrowatt) and [`akupila/wireshark-growatt`](https://github.com/akupila/wireshark-growatt); confirmed against the author's own captures. | BSD-3-Clause / MIT | |
+| `growatt_protocol/registers/*` | [`WouterTuinstra/Homeassistant-Growatt-Local-Modbus`](https://github.com/WouterTuinstra/Homeassistant-Growatt-Local-Modbus), which itself cites the Growatt specifications below. | **Apache-2.0** | See "Apache-2.0 notice" below. |
 | Register semantics | Growatt *Inverter Modbus RTU Protocol II* (V1.20 / V1.24), *PV Inverter Modbus RS485 RTU Protocol* (v3.x), *OffGrid SPF5000 Modbus RS485 RTU Protocol* | Vendor specification | Register numbers, scales and units are manufacturer-published facts. |
-| `registers/writable.py` | Growatt *Inverter Modbus RTU Protocol II*, plus community reports explicitly marked as such. | Vendor specification | Every entry records its own source and a confidence level; see below. |
+| `growatt_protocol/registers/writable.py` | Growatt *Inverter Modbus RTU Protocol II*, plus community reports explicitly marked as such. | Vendor specification | Every entry records its own source and a confidence level; see below. |
 | `tools/capture.py` | This project. | This project | |
 | Test fixtures | Packet captures taken by the author from their own ShineLan-X datalogger, pseudonymised by `tools/capture.py`. | This project | |
 
 ## Apache-2.0 notice
 
-Parts of `custom_components/growatt_datalogger/registers/` are derived from
+Parts of `packages/growatt-protocol/src/growatt_protocol/registers/` are derived from
 `WouterTuinstra/Homeassistant-Growatt-Local-Modbus`, licensed under the Apache License, Version 2.0.
 A copy is provided in [`LICENSE-APACHE`](LICENSE-APACHE). That project contains no `NOTICE` file.
 
@@ -53,7 +53,7 @@ Individual derived files carry an Apache-2.0 header identifying them as such.
 
 ## Confidence in writable registers
 
-`custom_components/growatt_datalogger/registers/writable.py` is the one place where the
+`growatt_protocol/registers/writable.py` is the one place where the
 distinction between documented and folklore matters operationally, so it is recorded in
 the data rather than in prose. Each entry carries:
 
@@ -70,5 +70,6 @@ someone can judge a register's provenance without reading this file.
 - This repository was developed without any grott checkout open.
 - Identifier names follow the Growatt specification and the Apache-2.0 `ATTR_*` vocabulary, not
   grott's field names.
-- Nothing under `protocol/` imports Home Assistant; that is enforced by a test, so the protocol
-  layer can be audited and run standalone.
+- Nothing in `growatt-protocol` imports Home Assistant or anything outside the standard library;
+  that is enforced by a test. The package is separately published and separately auditable, so a
+  reader can check the licence position of the protocol work without reading the integration.

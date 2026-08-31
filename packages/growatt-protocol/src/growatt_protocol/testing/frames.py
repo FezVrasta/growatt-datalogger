@@ -8,11 +8,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from custom_components.growatt_datalogger.protocol.crc import append_crc
-from custom_components.growatt_datalogger.protocol.crypt import (
-    OBFUSCATED_PROTOCOLS,
-    xor_payload,
-)
+from ..crc import append_crc
+from ..crypt import OBFUSCATED_PROTOCOLS, xor_payload
 
 SERIAL_WIDTH = {2: 10, 5: 10, 6: 30}
 

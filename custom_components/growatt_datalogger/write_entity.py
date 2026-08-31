@@ -21,6 +21,8 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+from growatt_protocol import CommandTimeout, commands
+from growatt_protocol.registers.writable import Encoding, WritableRegister, WriteKind, for_profile
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
@@ -31,9 +33,6 @@ from .const import KIND_INVERTER, SIGNAL_NEW_DEVICE
 from .entity import GrowattEntity
 from .hub import GrowattDevice, GrowattHub
 from .metadata import pretty
-from .protocol import commands
-from .protocol.errors import CommandTimeout
-from .registers.writable import Encoding, WritableRegister, WriteKind, for_profile
 
 _LOGGER = logging.getLogger(__name__)
 

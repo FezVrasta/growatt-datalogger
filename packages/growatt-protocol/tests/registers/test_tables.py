@@ -8,13 +8,12 @@ fail the build rather than surface as a sensor reading 6553.5 degrees.
 from __future__ import annotations
 
 import pytest
-
-from custom_components.growatt_datalogger.registers import (
+from growatt_protocol.registers import (
     PROFILES,
     RegisterSpace,
     ValueKind,
 )
-from custom_components.growatt_datalogger.registers.base import Profile
+from growatt_protocol.registers.base import Profile
 
 PROFILE_CASES = list(PROFILES.values())
 CASE_IDS = [profile.key for profile in PROFILE_CASES]
@@ -102,7 +101,7 @@ def test_the_known_upstream_slip_is_not_present() -> None:
     reintroducing them would attach a PV energy counter to whatever a 0-block device
     happens to report at 71.
     """
-    from custom_components.growatt_datalogger.registers.tables import protocol_ii
+    from growatt_protocol.registers.tables import protocol_ii
 
     stray = [spec for spec in protocol_ii.INPUT_REGISTERS_3000 if spec.register < 3000]
     assert not stray, f"0-block registers leaked into the 3000 table: {stray}"
@@ -114,7 +113,7 @@ def test_the_two_protocol_ii_blocks_are_genuinely_different_layouts() -> None:
     The 0-block carries eight MPPT inputs and the 3000-block four, so total output power
     is register 35 in one and 3023 in the other -- a difference of 2988, not 3000.
     """
-    from custom_components.growatt_datalogger.registers.tables import protocol_ii
+    from growatt_protocol.registers.tables import protocol_ii
 
     zero = {spec.name: spec.register for spec in protocol_ii.INPUT_REGISTERS}
     three = {spec.name: spec.register for spec in protocol_ii.INPUT_REGISTERS_3000}

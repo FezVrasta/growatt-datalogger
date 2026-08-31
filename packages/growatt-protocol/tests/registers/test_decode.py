@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from custom_components.growatt_datalogger.registers import (
+from growatt_protocol.registers import (
     PROTOCOL_II,
     PROTOCOL_II_3000,
     RegisterSpace,
     decode_registers,
 )
-from custom_components.growatt_datalogger.registers.base import (
+from growatt_protocol.registers.base import (
     Profile,
     RegisterSpec,
     ValueKind,
@@ -93,7 +93,7 @@ def test_text_values_unpack_two_characters_per_register() -> None:
 
 def test_input_and_holding_are_separate_address_spaces() -> None:
     """Holding 3001 is the serial number; input 3001 is total PV power."""
-    from custom_components.growatt_datalogger.registers import STORAGE_3000
+    from growatt_protocol.registers import STORAGE_3000
 
     assert STORAGE_3000.get(3001, RegisterSpace.INPUT).name == "input_power"
     assert STORAGE_3000.get(3001, RegisterSpace.HOLDING).name == "serial_number"
@@ -101,7 +101,7 @@ def test_input_and_holding_are_separate_address_spaces() -> None:
 
 def test_storage_overlay_replaces_the_base_serial_register() -> None:
     """Composing must not leave one name reachable from two different registers."""
-    from custom_components.growatt_datalogger.registers import STORAGE_3000
+    from growatt_protocol.registers import STORAGE_3000
 
     holding = STORAGE_3000.specs_for(RegisterSpace.HOLDING)
     serials = [spec for spec in holding.values() if spec.name == "serial_number"]

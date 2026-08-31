@@ -12,9 +12,8 @@ import asyncio
 import contextlib
 from datetime import datetime
 
-from custom_components.growatt_datalogger.protocol.framing import Framer
-from custom_components.growatt_datalogger.protocol.records import Frame
-
+from ..framing import Framer
+from ..records import Frame
 from .frames import build_data_record, build_frame, build_group
 
 

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+from growatt_protocol.registers.writable import WritableRegister, WriteKind
 from homeassistant.components.select import SelectEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import GrowattConfigEntry
 from .hub import GrowattDevice, GrowattHub
-from .registers.writable import WritableRegister, WriteKind
 from .write_entity import GrowattWriteEntity, async_setup_write_platform
 
 

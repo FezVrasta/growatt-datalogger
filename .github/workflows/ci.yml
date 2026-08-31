@@ -7,19 +7,38 @@ on:
 
 jobs:
   # The dependency list is the point of this job. It installs test tooling and nothing
-  # else -- no Home Assistant, no third-party runtime libraries -- and runs the protocol
-  # and register suites plus the purity check. If the shipped code ever grows a
-  # dependency, this fails.
-  core:
-    name: Protocol and registers (no dependencies)
+  # else -- no Home Assistant, no third-party runtime libraries -- and runs the library
+  # suite from its own directory. If growatt-protocol ever grows a dependency this
+  # fails, and so does its own test_purity.py.
+  library:
+    name: growatt-protocol (no dependencies)
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/growatt-protocol
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
       - run: pip install pytest pytest-asyncio hypothesis
-      - run: python -m pytest tests/protocol tests/registers tests/test_purity.py -q
+      - run: python -m pytest -q
+
+  build:
+    name: Build the package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install build twine
+      - run: python -m build packages/growatt-protocol
+      - run: twine check packages/growatt-protocol/dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: packages/growatt-protocol/dist/*
 
   integration:
     name: Home Assistant integration
@@ -29,8 +48,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+      - run: pip install ./packages/growatt-protocol
       - run: pip install pytest pytest-asyncio hypothesis pytest-homeassistant-custom-component
       - run: python -m pytest tests -q
+
+  manifest:
+    name: Manifest matches the package version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Home Assistant installs exactly what the manifest pins, so a release that bumps
+      # the package without bumping the pin ships the old code to every user.
+      - run: |
+          pkg=$(grep -m1 '^version' packages/growatt-protocol/pyproject.toml | cut -d'"' -f2)
+          req=$(python -c "import json;print(json.load(open('custom_components/growatt_datalogger/manifest.json'))['requirements'][0])")
+          echo "package=$pkg requirement=$req"
+          test "$req" = "growatt-protocol==$pkg"
 
   lint:
     name: Lint

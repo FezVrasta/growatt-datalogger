@@ -6,12 +6,8 @@ both directions while forwarding to a real server. The output is a JSONL file th
 attached to an issue.
 
 Serial numbers identify a specific person's hardware, so they are replaced before anything
-is written. The replacement is deterministic (an HMAC of the serial, truncated and
-re-encoded to the same length and alphabet), which matters: a capture with mangled serials
-would not decode, and one with randomly different serials in each frame would look like
-several devices. Because the serial sits inside the obfuscated body, the frame is
-deobfuscated, edited, re-obfuscated, and its checksum recomputed -- so a redacted capture
-is still a valid, decodable session.
+is written, by :mod:`growatt_protocol.redaction` -- deterministically and at the same
+length, so the capture still decodes and still looks like one device.
 
 Usage::
 
@@ -29,76 +25,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
-import hashlib
-import hmac
 import json
-import re
-import secrets
 import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from custom_components.growatt_datalogger.protocol.crc import append_crc
-from custom_components.growatt_datalogger.protocol.crypt import (
-    OBFUSCATED_PROTOCOLS,
-    xor_payload,
-)
-from custom_components.growatt_datalogger.protocol.framing import Framer
-
-#: Growatt serials are upper-case alphanumeric.
-_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-_SERIAL_RE = re.compile(rb"[A-Z0-9]{8,16}")
-
-
-class Pseudonymiser:
-    """Replaces serials with stable, same-shape stand-ins."""
-
-    def __init__(self, key: bytes | None = None) -> None:
-        # A fresh key per run, so two captures cannot be correlated to each other.
-        self.key = key or secrets.token_bytes(32)
-        self._seen: dict[bytes, bytes] = {}
-
-    def replace(self, serial: bytes) -> bytes:
-        if serial in self._seen:
-            return self._seen[serial]
-
-        digest = hmac.new(self.key, serial, hashlib.sha256).digest()
-        replacement = bytes(
-            _ALPHABET[digest[i] % len(_ALPHABET)].encode()[0] for i in range(len(serial))
-        )
-        self._seen[serial] = replacement
-        return replacement
-
-    @property
-    def mapping(self) -> dict[str, str]:
-        return {
-            original.decode("ascii", "replace"): new.decode()
-            for original, new in self._seen.items()
-        }
-
-
-def redact(frame: bytes, pseudonymiser: Pseudonymiser) -> bytes:
-    """Return ``frame`` with its serials replaced and its checksum fixed."""
-    if len(frame) < 8:
-        return frame
-
-    protocol = frame[3]
-    obfuscated = protocol in OBFUSCATED_PROTOCOLS
-
-    plain = bytearray(xor_payload(frame) if obfuscated else frame)
-    end = len(plain) - (2 if obfuscated else 0)
-
-    # Only the first ~80 bytes of a payload hold serials; searching the whole record
-    # would rewrite register values that happen to look like ASCII.
-    for match in _SERIAL_RE.finditer(bytes(plain[8 : min(end, 8 + 80)])):
-        start = 8 + match.start()
-        plain[start : start + len(match.group())] = pseudonymiser.replace(match.group())
-
-    if not obfuscated:
-        return bytes(plain)
-    return append_crc(xor_payload(bytes(plain[:end])))
+from growatt_protocol import Framer
+from growatt_protocol.redaction import Pseudonymiser, redact
 
 
 class Capture:

@@ -5,16 +5,15 @@ from __future__ import annotations
 from datetime import datetime
 
 import pytest
-
-from custom_components.growatt_datalogger.protocol import commands
-from custom_components.growatt_datalogger.protocol.commands import (
+from growatt_protocol import commands
+from growatt_protocol.commands import (
     REGISTER_TIME,
     parse_command_response,
 )
-from custom_components.growatt_datalogger.protocol.crc import check_crc
-from custom_components.growatt_datalogger.protocol.errors import RecordError
-from custom_components.growatt_datalogger.protocol.records import Frame
-from tests.fakes.frames import build_frame
+from growatt_protocol.crc import check_crc
+from growatt_protocol.errors import RecordError
+from growatt_protocol.records import Frame
+from growatt_protocol.testing.frames import build_frame
 
 SERIAL = "GPG0EXAMP1"
 

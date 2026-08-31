@@ -1,0 +1,26 @@
+name: Publish growatt-protocol
+
+# Publishing is manual and tag-driven, and uses PyPI Trusted Publishing, so there is no
+# API token to store or leak. Configure the publisher once at
+# https://pypi.org/manage/project/growatt-protocol/settings/publishing/
+on:
+  push:
+    tags: ["growatt-protocol-v*"]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install build
+      - run: python -m build packages/growatt-protocol
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: packages/growatt-protocol/dist

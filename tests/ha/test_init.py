@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from growatt_protocol.testing import FakeDatalogger
+from growatt_protocol.testing.frames import build_group
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_PORT
 from homeassistant.core import HomeAssistant
@@ -13,8 +15,6 @@ from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.growatt_datalogger.const import DOMAIN
-from tests.fakes.datalogger import FakeDatalogger
-from tests.fakes.frames import build_group
 
 
 async def _settle(hass: HomeAssistant, times: int = 3) -> None:

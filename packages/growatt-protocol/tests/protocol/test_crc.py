@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from hypothesis import given
-from hypothesis import strategies as st
-
-from custom_components.growatt_datalogger.protocol.crc import (
+from growatt_protocol.crc import (
     append_crc,
     check_crc,
     modbus_crc,
 )
+from hypothesis import given
+from hypothesis import strategies as st
 
 _POLY = 0xA001
 

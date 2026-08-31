@@ -7,6 +7,7 @@ unitless, classless sensor nobody notices is wrong.
 from __future__ import annotations
 
 import pytest
+from growatt_protocol.registers import RegisterSpace, all_spec_names
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 
 from custom_components.growatt_datalogger import metadata
@@ -18,7 +19,6 @@ from custom_components.growatt_datalogger.const import (
     VALUE_PROFILE,
     VALUE_RECORDS,
 )
-from custom_components.growatt_datalogger.registers import RegisterSpace, all_spec_names
 
 ALL_NAMES = sorted(all_spec_names(RegisterSpace.INPUT) | all_spec_names(RegisterSpace.HOLDING))
 

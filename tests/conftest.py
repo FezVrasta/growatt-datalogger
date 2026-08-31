@@ -1,10 +1,8 @@
-"""Shared test configuration.
+"""Shared configuration for the Home Assistant integration tests.
 
-The protocol and register suites must run in an environment with no Home Assistant
-installed -- that is the point of the minimal CI job -- so the Home Assistant test plugin
-is loaded only when it is actually present, and the tests that need it are skipped
-otherwise. pytest requires ``pytest_plugins`` to be declared here, in the top-level
-conftest, which is why the conditional lives at this level rather than in ``tests/ha``.
+The protocol and register layers live in the ``growatt-protocol`` package and are tested
+there, without Home Assistant installed. What is left here needs Home Assistant, so it is
+skipped when the test plugin is absent rather than failing to import.
 """
 
 from __future__ import annotations
@@ -28,11 +26,11 @@ collect_ignore_glob: list[str] = [] if HAS_HOMEASSISTANT else ["ha/*"]
 
 
 if HAS_HOMEASSISTANT:
-    # The Home Assistant test plugin blocks real sockets, which is a sensible default
-    # for integrations that talk to hardware over a mocked client. This one *is* a
+    # The Home Assistant test plugin blocks real sockets, which is the right default for
+    # an integration that talks to hardware through a mocked client. This one runs a
     # socket server: its tests bind loopback on an OS-assigned port and drive it with a
     # real client, because faking the transport would leave the framing, the ACK timing
-    # and the reassembly -- the parts most likely to be wrong -- untested.
+    # and the reassembly untested.
     @pytest.fixture(autouse=True)
     def _allow_real_sockets(socket_enabled: None) -> Generator[None]:
         yield

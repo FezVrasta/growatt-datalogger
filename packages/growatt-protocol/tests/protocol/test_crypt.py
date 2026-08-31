@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-from hypothesis import given
-from hypothesis import strategies as st
-
-from custom_components.growatt_datalogger.protocol.crypt import (
+from growatt_protocol.crypt import (
     HEADER_LENGTH,
     KEY,
     deobfuscate,
     xor_payload,
 )
+from hypothesis import given
+from hypothesis import strategies as st
 
 
 def test_key_is_the_ascii_word() -> None:

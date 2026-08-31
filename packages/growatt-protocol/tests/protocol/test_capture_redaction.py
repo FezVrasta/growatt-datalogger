@@ -1,25 +1,20 @@
 """Redaction of captured frames.
 
 A capture is meant to be attachable to a public issue, so "no original serial survives"
-has to be a checked property, not an intention.
+has to be a checked property, not an intention -- and it has to stay decodable, or it is
+useless as a fixture.
 """
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
-from custom_components.growatt_datalogger.protocol.crc import check_crc
-from custom_components.growatt_datalogger.protocol.records import (
+from growatt_protocol.crc import check_crc
+from growatt_protocol.records import (
     Frame,
     parse_register_record,
 )
-from tests.fakes.frames import build_data_record
-from tools.capture import Pseudonymiser, redact
+from growatt_protocol.redaction import Pseudonymiser, redact
+from growatt_protocol.testing.frames import build_data_record
 
 LOGGER_SERIAL = "GPG0EXAMP1"
 INVERTER_SERIAL = "SML0EXAMP2"

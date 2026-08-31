@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from growatt_protocol import CommandTimeout, commands
 from homeassistant.components.button import ButtonEntity
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
@@ -14,8 +15,6 @@ from . import GrowattConfigEntry
 from .const import KIND_DATALOGGER, SIGNAL_NEW_DEVICE
 from .entity import GrowattEntity
 from .hub import GrowattDevice, GrowattHub
-from .protocol import commands
-from .protocol.errors import CommandTimeout
 
 SYNC_TIME = "sync_time"
 

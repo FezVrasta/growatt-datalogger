@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from custom_components.growatt_datalogger.registers import (
+from growatt_protocol.registers import (
     LEGACY_315,
     OFFGRID,
     PROTOCOL_II,

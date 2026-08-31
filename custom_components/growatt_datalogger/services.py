@@ -15,6 +15,7 @@ import logging
 from typing import Any
 
 import voluptuous as vol
+from growatt_protocol import CommandTimeout, commands
 from homeassistant.core import (
     HomeAssistant,
     ServiceCall,
@@ -28,8 +29,6 @@ from homeassistant.helpers import device_registry as dr
 
 from .const import DOMAIN
 from .hub import GrowattHub
-from .protocol import commands
-from .protocol.errors import CommandTimeout
 
 _LOGGER = logging.getLogger(__name__)
 

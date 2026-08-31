@@ -5,12 +5,12 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Generator
 
 import pytest
+from growatt_protocol.testing import FakeDatalogger
 from homeassistant.const import CONF_PORT
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.growatt_datalogger.const import DOMAIN
-from tests.fakes.datalogger import FakeDatalogger
 
 
 @pytest.fixture(autouse=True)

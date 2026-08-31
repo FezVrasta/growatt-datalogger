@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from growatt_protocol.registers.writable import WriteKind
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import GrowattConfigEntry
-from .registers.writable import WriteKind
 from .write_entity import GrowattWriteEntity, async_setup_write_platform
 
 

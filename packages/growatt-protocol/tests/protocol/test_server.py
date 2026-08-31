@@ -6,13 +6,12 @@ import asyncio
 from collections.abc import AsyncIterator
 
 import pytest
-
-from custom_components.growatt_datalogger.protocol.server import (
+from growatt_protocol.server import (
     GrowattServer,
     ServerConfig,
 )
-from custom_components.growatt_datalogger.protocol.session import Record
-from tests.fakes.datalogger import FakeDatalogger
+from growatt_protocol.session import Record
+from growatt_protocol.testing import FakeDatalogger
 
 pytestmark = pytest.mark.asyncio
 

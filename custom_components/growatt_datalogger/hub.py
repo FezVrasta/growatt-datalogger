@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from growatt_protocol import GrowattServer, Record, RelayConfig, ServerConfig, Session
+from growatt_protocol.registers import RegisterSpace, decode_registers, resolve_profile
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
@@ -46,10 +48,6 @@ from .const import (
     VALUE_PROFILE,
     VALUE_RECORDS,
 )
-from .protocol.relay import RelayConfig
-from .protocol.server import GrowattServer, ServerConfig
-from .protocol.session import Record, Session
-from .registers import RegisterSpace, decode_registers, resolve_profile
 
 _LOGGER = logging.getLogger(__name__)
 

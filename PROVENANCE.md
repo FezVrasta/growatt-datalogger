@@ -29,6 +29,8 @@ identifier name, or file layout is reproduced here.
 | `protocol/records.py` | Payload structure (serials, timestamp, register-group count, `(start, end)` group headers) from nwf's notes, [`aaronjbrown/PyGrowatt`](https://github.com/aaronjbrown/PyGrowatt) and [`akupila/wireshark-growatt`](https://github.com/akupila/wireshark-growatt); confirmed against the author's own captures. | BSD-3-Clause / MIT | |
 | `registers/*` | [`WouterTuinstra/Homeassistant-Growatt-Local-Modbus`](https://github.com/WouterTuinstra/Homeassistant-Growatt-Local-Modbus), which itself cites the Growatt specifications below. | **Apache-2.0** | See "Apache-2.0 notice" below. |
 | Register semantics | Growatt *Inverter Modbus RTU Protocol II* (V1.20 / V1.24), *PV Inverter Modbus RS485 RTU Protocol* (v3.x), *OffGrid SPF5000 Modbus RS485 RTU Protocol* | Vendor specification | Register numbers, scales and units are manufacturer-published facts. |
+| `registers/writable.py` | Growatt *Inverter Modbus RTU Protocol II*, plus community reports explicitly marked as such. | Vendor specification | Every entry records its own source and a confidence level; see below. |
+| `tools/capture.py` | This project. | This project | |
 | Test fixtures | Packet captures taken by the author from their own ShineLan-X datalogger, pseudonymised by `tools/capture.py`. | This project | |
 
 ## Apache-2.0 notice
@@ -48,6 +50,20 @@ Changes made to the derived material, as required by Apache-2.0 §4(b):
 - Home Assistant entity metadata rewritten for this integration's entity model.
 
 Individual derived files carry an Apache-2.0 header identifying them as such.
+
+## Confidence in writable registers
+
+`custom_components/growatt_datalogger/registers/writable.py` is the one place where the
+distinction between documented and folklore matters operationally, so it is recorded in
+the data rather than in prose. Each entry carries:
+
+* `confidence` -- `verified` for registers documented in a Growatt specification,
+  `community` for meanings that are widely reported but absent from it.
+* `source` -- the specific document and register, or a note that it is a community report.
+
+Only `verified` entries become entities by default; the rest are created disabled and only
+when a user opts in for that device. Both fields are exposed as entity attributes, so
+someone can judge a register's provenance without reading this file.
 
 ## Hygiene
 

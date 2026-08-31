@@ -16,7 +16,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: pip install pytest hypothesis
+      - run: pip install pytest pytest-asyncio hypothesis
       - run: python -m pytest tests/protocol tests/registers tests/test_purity.py -q
 
   lint:

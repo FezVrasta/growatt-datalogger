@@ -7,9 +7,11 @@ requires-python = ">=3.13"
 dependencies = []
 
 [dependency-groups]
-# Everything needed to run tests/protocol and tests/registers. Deliberately does
-# NOT include Home Assistant -- those suites must pass without it.
-protocol = ["pytest>=8", "hypothesis>=6"]
+# Everything needed to run tests/protocol and tests/registers. These are test tools
+# only -- the integration itself declares no runtime dependencies at all, and
+# tests/test_purity.py enforces that by walking the source. Deliberately does NOT
+# include Home Assistant: those suites must pass without it.
+protocol = ["pytest>=8", "pytest-asyncio>=0.24", "hypothesis>=6"]
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.24",
@@ -20,9 +22,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# asyncio_mode is deliberately not set here: it is a pytest-asyncio option, and the
-# protocol suite must run in an environment where that plugin is absent. Async tests
-# added later carry an explicit @pytest.mark.asyncio.
+asyncio_mode = "auto"
 
 [tool.ruff]
 target-version = "py313"

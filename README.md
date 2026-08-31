@@ -103,8 +103,27 @@ data:
   confirm: true      # required outside a small known-safe list
 ```
 
+When a value spans more than one register, or several registers must change together,
+write the run in one operation — writing them one at a time leaves the inverter briefly
+holding a mix of old and new values:
+
+```yaml
+action: growatt_datalogger.write_registers
+data:
+  device_id: <your inverter>
+  start_register: 1100
+  values: [1560, 1740, 1]
+  confirm: true
+```
+
 `confirm` is a deliberate speed bump. Writing the wrong holding register on a grid-tied
-inverter can change how it behaves on the grid.
+inverter can change how it behaves on the grid. `write_registers` always requires it,
+since a range is not one documented setting.
+
+Between `read_register`, `write_register` and `write_registers` every inverter holding
+register is reachable, and `read_register`/`write_register` with `target: datalogger`
+reach the datalogger's own parameters. The entities above are a curated shortcut for the
+settings Growatt documents, not the limit of what you can change.
 
 ## Adding support for your inverter
 

@@ -111,6 +111,28 @@
           "description": "The datalogger whose clock to set."
         }
       }
+    },
+    "write_registers": {
+      "name": "Write registers",
+      "description": "Write a contiguous run of Modbus holding registers in a single operation. Use this when a value spans more than one register, or when several registers must change together: writing them one at a time leaves the inverter briefly holding a mix of old and new values.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The Growatt inverter to write to."
+        },
+        "start_register": {
+          "name": "Start register",
+          "description": "The first register in the run."
+        },
+        "values": {
+          "name": "Values",
+          "description": "A list of 16-bit values, written to consecutive registers starting at the first."
+        },
+        "confirm": {
+          "name": "Confirm",
+          "description": "Always required. A multi-register write covers a range rather than one documented setting."
+        }
+      }
     }
   }
 }

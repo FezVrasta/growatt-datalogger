@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+import voluptuous as vol
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr
@@ -239,4 +240,77 @@ async def test_an_unknown_device_is_rejected(
             {"device_id": "does-not-exist", "register": 3},
             blocking=True,
             return_response=True,
+        )
+
+
+async def test_write_registers_sends_one_multi_register_command(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, device: FakeDatalogger
+) -> None:
+    """A run must go out as a single 0x10, not as several 0x06 writes.
+
+    Writing a multi-register value one register at a time leaves a window in which the
+    inverter holds a mix of the old and new values.
+    """
+    device_id = await _announced_device_id(hass, device)
+
+    call = asyncio.create_task(
+        hass.services.async_call(
+            DOMAIN,
+            "write_registers",
+            {
+                "device_id": device_id,
+                "start_register": 1100,
+                "values": [1560, 1740, 1],
+                "confirm": True,
+            },
+            blocking=True,
+            return_response=True,
+        )
+    )
+    await asyncio.sleep(0.05)
+
+    request = await _await_request(device, 0x10)
+    assert int.from_bytes(request.body[30:32], "big") == 1100
+    assert int.from_bytes(request.body[32:34], "big") == 1102  # start + len - 1
+    assert request.body[34:40] == b"\x06\x18\x06\xcc\x00\x01"
+
+    body = (
+        SERIAL.encode().ljust(30, b"\x00")
+        + (1100).to_bytes(2, "big")
+        + (1102).to_bytes(2, "big")
+        + b"\x00"
+    )
+    await device.send_raw(build_frame(body, protocol=6, function=0x10, sequence=request.sequence))
+
+    result = await asyncio.wait_for(call, 5)
+    assert result["start_register"] == 1100
+    assert result["count"] == 3
+
+
+async def test_write_registers_always_requires_confirmation(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, device: FakeDatalogger
+) -> None:
+    """There is no allowlist here: a range is not one documented setting."""
+    device_id = await _announced_device_id(hass, device)
+
+    with pytest.raises(ServiceValidationError, match="confirm"):
+        await hass.services.async_call(
+            DOMAIN,
+            "write_registers",
+            {"device_id": device_id, "start_register": 3, "values": [80]},
+            blocking=True,
+        )
+
+
+async def test_write_registers_rejects_an_empty_list(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, device: FakeDatalogger
+) -> None:
+    device_id = await _announced_device_id(hass, device)
+
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(
+            DOMAIN,
+            "write_registers",
+            {"device_id": device_id, "start_register": 3, "values": [], "confirm": True},
+            blocking=True,
         )

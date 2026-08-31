@@ -67,3 +67,28 @@ sync_time:
       selector:
         device:
           integration: growatt_datalogger
+
+write_registers:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: growatt_datalogger
+    start_register:
+      required: true
+      example: 1100
+      selector:
+        number:
+          min: 0
+          max: 65535
+          mode: box
+    values:
+      required: true
+      example: "[1560, 1740, 1]"
+      selector:
+        object:
+    confirm:
+      default: false
+      selector:
+        boolean:

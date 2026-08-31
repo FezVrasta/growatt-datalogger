@@ -35,6 +35,7 @@ _LOGGER = logging.getLogger(__name__)
 
 SERVICE_READ_REGISTER = "read_register"
 SERVICE_WRITE_REGISTER = "write_register"
+SERVICE_WRITE_REGISTERS = "write_registers"
 SERVICE_SYNC_TIME = "sync_time"
 
 ATTR_DEVICE_ID = "device_id"
@@ -42,6 +43,8 @@ ATTR_TARGET = "target"
 ATTR_REGISTER = "register"
 ATTR_END_REGISTER = "end_register"
 ATTR_VALUE = "value"
+ATTR_VALUES = "values"
+ATTR_START = "start_register"
 ATTR_CONFIRM = "confirm"
 
 TARGET_INVERTER = "inverter"
@@ -70,6 +73,17 @@ _WRITE_SCHEMA = vol.Schema(
         ),
         vol.Required(ATTR_REGISTER): vol.All(int, vol.Range(min=0, max=65535)),
         vol.Required(ATTR_VALUE): vol.Any(int, cv.string),
+        vol.Optional(ATTR_CONFIRM, default=False): cv.boolean,
+    }
+)
+
+_WRITE_MANY_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_DEVICE_ID): cv.string,
+        vol.Required(ATTR_START): vol.All(int, vol.Range(min=0, max=65535)),
+        vol.Required(ATTR_VALUES): vol.All(
+            cv.ensure_list, [vol.All(int, vol.Range(min=0, max=65535))], vol.Length(min=1)
+        ),
         vol.Optional(ATTR_CONFIRM, default=False): cv.boolean,
     }
 )
@@ -169,6 +183,44 @@ def async_register_services(hass: HomeAssistant) -> None:
             raise HomeAssistantError(f"The device rejected the write with result {response.result}")
         return {"register": response.register, "result": response.result}
 
+    async def _write_many(call: ServiceCall) -> ServiceResponse:
+        """Write a contiguous run of holding registers in one operation (0x10).
+
+        The reason this exists separately from write_register: a 32-bit quantity spans
+        two registers, and writing it as two single-register calls leaves a window in
+        which the inverter holds half of the old value and half of the new one. Sending
+        the run as one command removes that window.
+        """
+        hub, serial = _resolve(hass, call.data[ATTR_DEVICE_ID])
+        session = _session(hub, serial)
+        start = call.data[ATTR_START]
+        values = call.data[ATTR_VALUES]
+
+        # Always confirmed, with no allowlist. A multi-register write touches a range
+        # rather than one documented setting, so there is no small set of these that is
+        # safe enough to wave through.
+        if not call.data[ATTR_CONFIRM]:
+            raise ServiceValidationError(
+                f"Writing {len(values)} registers from {start} needs confirm: true."
+            )
+
+        try:
+            response = await session.send_command(
+                commands.write_inverter_range(serial, session.protocol, start, values)
+            )
+        except (CommandTimeout, ConnectionError) as err:
+            raise HomeAssistantError(str(err)) from err
+
+        if not response.ok:
+            raise HomeAssistantError(
+                f"The inverter rejected the write with result {response.result}"
+            )
+        return {
+            "start_register": response.register,
+            "count": len(values),
+            "result": response.result,
+        }
+
     async def _sync_time(call: ServiceCall) -> None:
         hub, serial = _resolve(hass, call.data[ATTR_DEVICE_ID])
         session = _session(hub, serial)
@@ -194,6 +246,13 @@ def async_register_services(hass: HomeAssistant) -> None:
         SERVICE_WRITE_REGISTER,
         _write,
         schema=_WRITE_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_WRITE_REGISTERS,
+        _write_many,
+        schema=_WRITE_MANY_SCHEMA,
         supports_response=SupportsResponse.OPTIONAL,
     )
     hass.services.async_register(DOMAIN, SERVICE_SYNC_TIME, _sync_time, schema=_SYNC_SCHEMA)

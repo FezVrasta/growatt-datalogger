@@ -181,6 +181,12 @@ class CommandResponse:
     empty: bool = False
     """A read that returned nothing, which is how a device reports an unknown register."""
 
+    end_register: int | None = None
+    """The last register of the range, echoed back by a read."""
+
+    values: tuple[int, ...] = ()
+    """Every word a range read returned. :attr:`value` is the first of them."""
+
     @property
     def ok(self) -> bool:
         return self.result in (None, 0)
@@ -203,11 +209,26 @@ def parse_command_response(frame: Frame) -> CommandResponse:
     rest = body[width + 2 :]
 
     if function == Function.INVERTER_READ:
-        # A device that does not implement a register answers with nothing after the
-        # register number, rather than with an error.
-        if len(rest) < 2:
+        # The reply echoes the range it was asked for -- start *and* end -- before any
+        # values, mirroring the request. Reading the word straight after the start
+        # register therefore yields the end register rather than the value, which on a
+        # single-register read looks convincingly like a plausible number: asking for
+        # register 3 comes back as 3. Confirmed against real hardware.
+        #
+        # A device that does not implement the range answers with the echo and nothing
+        # after it, rather than with an error.
+        if len(rest) < 4:
             return CommandResponse(function, register, empty=True)
-        return CommandResponse(function, register, value=int.from_bytes(rest[:2], "big"))
+
+        end = int.from_bytes(rest[:2], "big")
+        payload = rest[2:]
+        values = tuple(
+            int.from_bytes(payload[i : i + 2], "big")
+            for i in range(0, len(payload) - len(payload) % 2, 2)
+        )
+        if not values:
+            return CommandResponse(function, register, end_register=end, empty=True)
+        return CommandResponse(function, register, value=values[0], end_register=end, values=values)
 
     if function == Function.INVERTER_WRITE:
         # Both fields are present and both matter: an implementation that overwrites one

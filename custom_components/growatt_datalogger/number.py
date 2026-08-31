@@ -32,7 +32,7 @@ class GrowattNumber(GrowattWriteEntity, NumberEntity):
 
     @property
     def native_value(self) -> float | None:
-        return self._current
+        return self._state
 
     async def async_set_native_value(self, value: float) -> None:
         await self._async_write(value)

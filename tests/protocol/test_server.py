@@ -24,7 +24,7 @@ class Harness:
         self.connections: list[bool] = []
         self.server = GrowattServer(
             # Port 0 lets the OS pick, so tests never fight over a fixed number.
-            ServerConfig(host="127.0.0.1", port=0),
+            ServerConfig(host="127.0.0.1", port=0, push_time_on_announce=False),
             on_record=self.records.append,
             on_identify=lambda *args: self.identities.append(args),
             on_connection_change=lambda _s, up: self.connections.append(up),
@@ -203,6 +203,55 @@ async def test_a_dead_connection_is_reaped_after_the_read_timeout() -> None:
                 await asyncio.sleep(0.01)
 
         await asyncio.wait_for(_wait(), 2.0)
+        await device.close()
+    finally:
+        await server.stop()
+
+
+async def test_an_announce_triggers_a_clock_update() -> None:
+    """The behaviour whose absence stops a real datalogger sending any data at all.
+
+    A device expects the server to set its clock after it announces itself. Without it
+    the observed behaviour is a loop: announce, ping, wait, disconnect, reconnect --
+    forever, with no telemetry record ever arriving. Nothing in the exchange says the
+    clock is what it is waiting for, so this test is the reminder.
+    """
+    server = GrowattServer(ServerConfig(host="127.0.0.1", port=0, push_time_on_announce=True))
+    await server.start()
+    try:
+        device = FakeDatalogger()
+        await device.connect("127.0.0.1", server.port)
+
+        await device.send_announce()
+        ack = await device.read_frame()
+        assert ack.function == 0x03
+
+        # The clock update follows the acknowledgement, after a short pause.
+        for session in server.sessions.values():
+            session.time_sync_delay = 0.01
+
+        command = await device.read_frame(timeout=3.0)
+        assert command.function == 0x18
+        assert int.from_bytes(command.body[30:32], "big") == 0x1F
+        length = int.from_bytes(command.body[32:34], "big")
+        assert length == 19  # "YYYY-MM-DD HH:MM:SS"
+        assert b"-" in command.body[34 : 34 + length]
+
+        await device.close()
+    finally:
+        await server.stop()
+
+
+async def test_the_clock_update_can_be_turned_off() -> None:
+    server = GrowattServer(ServerConfig(host="127.0.0.1", port=0, push_time_on_announce=False))
+    await server.start()
+    try:
+        device = FakeDatalogger()
+        await device.connect("127.0.0.1", server.port)
+        await device.send_announce()
+        await device.read_frame()
+
+        await device.expect_nothing(within=0.3)
         await device.close()
     finally:
         await server.stop()

@@ -34,7 +34,7 @@ async def _server(upstream: FakeUpstream | None, records: list[Record]) -> Growa
         else RelayConfig(host="127.0.0.1", port=1, connect_timeout=0.5)
     )
     server = GrowattServer(
-        ServerConfig(host="127.0.0.1", port=0, relay=relay),
+        ServerConfig(host="127.0.0.1", port=0, relay=relay, push_time_on_announce=False),
         on_record=records.append,
     )
     await server.start()
@@ -194,7 +194,10 @@ async def test_takeover_is_sticky_for_the_rest_of_the_connection() -> None:
 async def test_relaying_is_off_unless_configured() -> None:
     """Nothing leaves the network by default."""
     records: list[Record] = []
-    server = GrowattServer(ServerConfig(host="127.0.0.1", port=0), on_record=records.append)
+    server = GrowattServer(
+        ServerConfig(host="127.0.0.1", port=0, push_time_on_announce=False),
+        on_record=records.append,
+    )
     await server.start()
     try:
         device = FakeDatalogger()

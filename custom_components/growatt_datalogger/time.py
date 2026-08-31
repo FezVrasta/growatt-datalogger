@@ -28,9 +28,9 @@ async def async_setup_entry(
 class GrowattTime(GrowattWriteEntity, TimeEntity):
     @property
     def native_value(self) -> dt_time | None:
-        if not isinstance(self._current, str):
+        if not isinstance(self._state, str):
             return None
-        hour, minute, _ = self._current.split(":")
+        hour, minute, _ = self._state.split(":")
         return dt_time(int(hour), int(minute))
 
     async def async_set_value(self, value: dt_time) -> None:

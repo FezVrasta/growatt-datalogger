@@ -116,17 +116,48 @@ def _response(function: int, tail: bytes, *, protocol: int = 6, register: int = 
 
 
 def test_inverter_read_response() -> None:
-    response = parse_command_response(_response(0x05, (1234).to_bytes(2, "big")))
+    # serial | start | end | value
+    tail = (3).to_bytes(2, "big") + (1234).to_bytes(2, "big")
+    response = parse_command_response(_response(0x05, tail))
+
     assert response.register == 3
+    assert response.end_register == 3
     assert response.value == 1234
     assert not response.empty
 
 
+def test_a_read_reply_echoes_the_range_before_its_values() -> None:
+    """The trap this format sets, pinned.
+
+    Reading the word straight after the start register yields the *end* register, which
+    on a single-register read is indistinguishable from a plausible value: asking for
+    register 3 comes back as 3. Found against real hardware, where a power limit of 100%
+    read back as 3.
+    """
+    tail = (3).to_bytes(2, "big") + (100).to_bytes(2, "big")
+    response = parse_command_response(_response(0x05, tail))
+
+    assert response.value == 100, "the echoed end register was mistaken for the value"
+
+
+def test_a_range_read_returns_every_value() -> None:
+    tail = (5).to_bytes(2, "big") + b"\x00\x0a\x00\x14\x00\x1e"
+    response = parse_command_response(_response(0x05, tail))
+
+    assert response.register == 3
+    assert response.end_register == 5
+    assert response.values == (10, 20, 30)
+    assert response.value == 10
+
+
 def test_an_unimplemented_register_reads_back_empty() -> None:
-    """Devices answer an unknown register with nothing, not with an error."""
-    response = parse_command_response(_response(0x05, b""))
-    assert response.empty
-    assert response.value is None
+    """Devices answer an unknown register with the range echo and nothing after it."""
+    echo_only = parse_command_response(_response(0x05, (3).to_bytes(2, "big")))
+    assert echo_only.empty
+    assert echo_only.value is None
+
+    nothing = parse_command_response(_response(0x05, b""))
+    assert nothing.empty
 
 
 def test_inverter_write_response_keeps_both_result_and_value() -> None:
@@ -173,7 +204,8 @@ def test_multi_register_write_response() -> None:
 
 @pytest.mark.parametrize("protocol", [2, 5, 6])
 def test_responses_parse_on_every_protocol(protocol: int) -> None:
-    response = parse_command_response(_response(0x05, (99).to_bytes(2, "big"), protocol=protocol))
+    tail = (3).to_bytes(2, "big") + (99).to_bytes(2, "big")
+    response = parse_command_response(_response(0x05, tail, protocol=protocol))
     assert response.value == 99
 
 

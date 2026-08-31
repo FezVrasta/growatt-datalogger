@@ -19,9 +19,10 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from . import commands
 from .commands import Command, CommandResponse, parse_command_response
 from .crc import check_crc
-from .errors import CommandTimeout, RecordError
+from .errors import CommandTimeout, GrowattProtocolError, RecordError
 from .records import (
     COMMAND_RESPONSE_FUNCTIONS,
     METER_FUNCTIONS,
@@ -48,6 +49,10 @@ DEFAULT_COMMAND_INTERVAL = 0.15
 
 #: Attempts for a read. Reads are idempotent, so retrying is free.
 READ_ATTEMPTS = 3
+
+#: Pause between acknowledging an announce and setting the device's clock, matching the
+#: gap a datalogger sees when talking to the vendor's own server.
+DEFAULT_TIME_SYNC_DELAY = 1.0
 
 #: A key identifying an outstanding command. The connection id rather than the serial:
 #: a device that reconnects gets a new id, so a reply from the previous socket can never
@@ -122,6 +127,11 @@ class Session:
         self.command_timeout = DEFAULT_COMMAND_TIMEOUT
         self.command_interval = DEFAULT_COMMAND_INTERVAL
 
+        self.push_time_on_announce = True
+        self.time_sync_delay = DEFAULT_TIME_SYNC_DELAY
+        self.time_synced = False
+        self._time_task: asyncio.Task[None] | None = None
+
         self._sequence = 0
         self._pending: dict[PendingKey, asyncio.Future[CommandResponse]] = {}
         self._pending_by_register: dict[tuple[int, int, int], asyncio.Future[CommandResponse]] = {}
@@ -168,6 +178,8 @@ class Session:
         if function in REGISTER_RECORD_FUNCTIONS:
             await self._reply(build_ack(frame))
             self._decode(frame)
+            if function == Function.ANNOUNCE:
+                self._schedule_time_sync()
             return
 
         if function in METER_FUNCTIONS:
@@ -233,6 +245,59 @@ class Session:
             # Deliberately broad: an application bug must not drop the connection.
             except Exception:
                 _LOGGER.exception("connection %s: record handler failed", self.connection_id)
+
+    # ------------------------------------------------------------------
+    # Time sync
+    # ------------------------------------------------------------------
+
+    def _schedule_time_sync(self) -> None:
+        """Set the device's clock after it announces itself.
+
+        A datalogger expects the server to do this. Left unset, it announces, waits,
+        gives up and reconnects -- announcing and pinging forever without ever sending a
+        telemetry record. Nothing in the exchange says the clock is what it is waiting
+        for; the symptom is simply that no data arrives.
+
+        Sent as a task rather than awaited inline, because the read loop is what feeds
+        the reply to the command we are about to issue: awaiting it here would deadlock
+        until the timeout.
+        """
+        if self.suppress_replies or not self.push_time_on_announce:
+            # In relay mode the cloud sets the clock, and two servers doing it would
+            # race over the same sequence space.
+            return
+        if self._time_task is not None and not self._time_task.done():
+            return
+        self._time_task = asyncio.create_task(self._push_time())
+
+    async def _push_time(self) -> None:
+        try:
+            # A short pause after the acknowledgement, matching the gap a datalogger
+            # sees when talking to the vendor's own server.
+            await asyncio.sleep(self.time_sync_delay)
+            if self.closed or self.datalogger_serial is None or self.protocol is None:
+                return
+            response = await self.send_command(
+                commands.set_time(self.datalogger_serial, self.protocol, self._now())
+            )
+        except asyncio.CancelledError:
+            raise
+        except (CommandTimeout, ConnectionError, GrowattProtocolError) as error:
+            _LOGGER.debug("connection %s: could not set the clock: %s", self.connection_id, error)
+            return
+        except Exception:
+            _LOGGER.exception("connection %s: clock update failed", self.connection_id)
+            return
+
+        if response.ok:
+            self.time_synced = True
+            _LOGGER.debug("connection %s: clock set", self.connection_id)
+        else:
+            _LOGGER.warning(
+                "connection %s: device rejected the clock update (result %s)",
+                self.connection_id,
+                response.result,
+            )
 
     # ------------------------------------------------------------------
     # Commands
@@ -359,6 +424,8 @@ class Session:
         shutdown, that means Home Assistant waiting on a dead socket.
         """
         self.closed = True
+        if self._time_task is not None and not self._time_task.done():
+            self._time_task.cancel()
         for future in list(self._pending.values()):
             if not future.done():
                 future.set_exception(ConnectionError("the datalogger disconnected"))

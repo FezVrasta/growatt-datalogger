@@ -53,7 +53,10 @@ async def _answer(
         got = int.from_bytes(request.body[30:32], "big")
 
         if request.function == function and got == register:
-            body = SERIAL.encode().ljust(30, b"\x00") + register.to_bytes(2, "big") + tail
+            body = SERIAL.encode().ljust(30, b"\x00") + register.to_bytes(2, "big")
+            if function == 0x05:
+                body += register.to_bytes(2, "big")  # reads echo the range
+            body += tail
             await device.send_raw(
                 build_frame(body, protocol=6, function=function, sequence=request.sequence)
             )
@@ -74,11 +77,10 @@ async def _await_request(device: FakeDatalogger, function: int, *, tries: int = 
         if request.function == function:
             return request
         register = int.from_bytes(request.body[30:32], "big")
-        body = (
-            SERIAL.encode().ljust(30, b"\x00")
-            + register.to_bytes(2, "big")
-            + (0).to_bytes(2, "big")
-        )
+        body = SERIAL.encode().ljust(30, b"\x00") + register.to_bytes(2, "big")
+        if request.function == 0x05:
+            body += register.to_bytes(2, "big")  # reads echo the range
+        body += (0).to_bytes(2, "big")
         await device.send_raw(
             build_frame(body, protocol=6, function=request.function, sequence=request.sequence)
         )

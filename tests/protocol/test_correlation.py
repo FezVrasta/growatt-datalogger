@@ -37,7 +37,12 @@ def make_session(**kwargs: object) -> tuple[Session, list[bytes]]:
 
 def reply(function: int, register: int, tail: bytes, sequence: int, protocol: int = 6) -> Frame:
     width = 30 if protocol == 6 else 10
-    body = SERIAL.encode().ljust(width, b"\x00") + register.to_bytes(2, "big") + tail
+    body = SERIAL.encode().ljust(width, b"\x00") + register.to_bytes(2, "big")
+    if function == 0x05:
+        # A read reply echoes the range it was asked for before any values, and a
+        # single-register read has end == start.
+        body += register.to_bytes(2, "big")
+    body += tail
     return Frame(build_frame(body, protocol=protocol, function=function, sequence=sequence))
 
 
@@ -160,7 +165,7 @@ async def test_two_connections_reading_the_same_register_do_not_collide() -> Non
     Two dataloggers, both asked for register 3, answering in the other order. Keying on
     the connection means each future gets its own device's value.
     """
-    server = GrowattServer(ServerConfig(host="127.0.0.1", port=0))
+    server = GrowattServer(ServerConfig(host="127.0.0.1", port=0, push_time_on_announce=False))
     await server.start()
     try:
         first = FakeDatalogger(datalogger_serial="AAA0000001")
@@ -196,6 +201,7 @@ async def test_two_connections_reading_the_same_register_do_not_collide() -> Non
             build_frame(
                 b"BBB0000002".ljust(30, b"\x00")
                 + (3).to_bytes(2, "big")
+                + (3).to_bytes(2, "big")  # reads echo the range
                 + (222).to_bytes(2, "big"),
                 protocol=6,
                 function=0x05,
@@ -206,6 +212,7 @@ async def test_two_connections_reading_the_same_register_do_not_collide() -> Non
             build_frame(
                 b"AAA0000001".ljust(30, b"\x00")
                 + (3).to_bytes(2, "big")
+                + (3).to_bytes(2, "big")  # reads echo the range
                 + (111).to_bytes(2, "big"),
                 protocol=6,
                 function=0x05,

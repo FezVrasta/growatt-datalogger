@@ -157,6 +157,24 @@ class GrowattHub:
         """Live connections, for diagnostics."""
         return list(self._server.sessions.values())
 
+    def session_for(self, serial: str) -> Session | None:
+        """The connection to talk to a datalogger on.
+
+        A datalogger can hold more than one connection open at a time -- it opens a new
+        one before the old has been reaped -- and the older one may be dead in the sense
+        that matters here: it still accepts writes but nothing answers on it. Commands
+        sent there simply time out. Pick the most recently active connection instead of
+        whichever happens to come first.
+        """
+        candidates = [
+            session
+            for session in self._server.sessions.values()
+            if session.datalogger_serial == serial and not session.closed
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda s: (s.last_seen is not None, s.last_seen))
+
     async def async_start(self) -> None:
         """Restore known devices, then bind. Raises OSError if the port is taken."""
         await self._async_restore()
@@ -269,7 +287,22 @@ class GrowattHub:
             inverter_key, KIND_INVERTER, inverter_serial, parent=logger_key
         )
 
-        if inverter.profile != match.profile.key:
+        _LOGGER.debug(
+            "record fn=%#04x space=%s profile=%s: %d named values, %d unnamed registers",
+            record.frame.function,
+            space.value,
+            match.profile.key,
+            len(decoded.values),
+            len(decoded.unknown),
+        )
+
+        # Only telemetry gets a vote on the profile. A profile says what the *input*
+        # registers mean, and an announce carries holding registers whose ranges are not
+        # comparable: on a string inverter the announce includes a 3125+ group, which
+        # makes the record look like a hybrid's. Letting it vote flips the profile on
+        # every announce, which churns the stored value and creates battery entities for
+        # a device that has no battery.
+        if space is RegisterSpace.INPUT and inverter.profile != match.profile.key:
             _LOGGER.info(
                 "%s: using profile %s (%s)",
                 inverter_serial,
@@ -310,13 +343,11 @@ class GrowattHub:
             totals[VALUE_DECODE_ERRORS] += session.stats.decode_errors
             totals[VALUE_CRC_MISMATCHES] += session.stats.crc_mismatches
 
-        existing = self.coordinators[key].data or {}
-        self._publish(key, {**existing, **totals, VALUE_LAST_RECORD: dt_util.utcnow()})
+        self._publish(key, {**totals, VALUE_LAST_RECORD: dt_util.utcnow()})
 
     def _bump(self, key: str, name: str) -> None:
-        coordinator = self.coordinators[key]
-        current = (coordinator.data or {}).get(name, 0)
-        self._publish(key, {**(coordinator.data or {}), name: current + 1})
+        current = (self.coordinators[key].data or {}).get(name, 0)
+        self._publish(key, {name: current + 1})
 
     # ------------------------------------------------------------------
     # Devices and entities
@@ -339,14 +370,23 @@ class GrowattHub:
         return device
 
     def _publish(self, key: str, values: dict[str, Any]) -> None:
-        """Push values to a device's coordinator, announcing any new field names."""
+        """Merge values into a device's coordinator, announcing any new field names.
+
+        Merged rather than replaced, because one device is fed from more than one kind
+        of record and they carry different things. An announce carries holding
+        registers -- firmware, serial number, power limit -- while a telemetry record
+        carries input registers. Replacing the dataset each time means every announce
+        wipes the telemetry and every telemetry record wipes the identity, leaving
+        whichever arrived last readable and everything else 'unknown'.
+        """
         device = self.devices[key]
         new_fields = set(values) - device.fields
         if new_fields:
             device.fields |= new_fields
             self._schedule_save()
 
-        self.coordinators[key].async_set_updated_data(values)
+        coordinator = self.coordinators[key]
+        coordinator.async_set_updated_data({**(coordinator.data or {}), **values})
 
         if new_fields:
             # Announce after the data is in place so a newly created entity's first

@@ -207,3 +207,56 @@ async def test_fragmented_records_still_produce_state(
         assert float(hass.states.get(entity_id).state) == 329.5
     finally:
         await logger.close()
+
+
+async def test_an_announce_does_not_wipe_the_telemetry(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, device: FakeDatalogger
+) -> None:
+    """The two record kinds feed the same device from different register spaces.
+
+    A telemetry record carries input registers; an announce carries holding registers.
+    Publishing either as a wholesale replacement means each wipes the other, and since a
+    datalogger announces on every reconnect, the visible symptom is telemetry that
+    populates once and then goes 'unknown' for good.
+    """
+    await device.send_data(groups=[build_group(3000, [1, 0, 0, 3295])])
+    await _settle(hass)
+
+    entity_registry = er.async_get(hass)
+    entity_id = entity_registry.async_get_entity_id(
+        "sensor", DOMAIN, f"{DOMAIN}_inverter:SML0EXAMP2_input_1_voltage"
+    )
+    assert entity_id is not None
+    assert float(hass.states.get(entity_id).state) == 329.5
+
+    # An announce arrives, as it does on every reconnect.
+    await device.send_announce(groups=[build_group(0, [1, 0, 0])])
+    await _settle(hass)
+
+    assert hass.states.get(entity_id).state != "unknown", "the announce wiped telemetry"
+    assert float(hass.states.get(entity_id).state) == 329.5
+
+
+async def test_only_telemetry_decides_the_profile(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, device: FakeDatalogger
+) -> None:
+    """An announce must not change which profile a device is decoded with.
+
+    A profile describes the input registers. An announce carries holding registers over
+    ranges that are not comparable -- a string inverter's announce includes a 3125+
+    group, which looks exactly like a hybrid's battery block. Letting it vote makes the
+    profile flip on every reconnect and creates battery entities for a device that has
+    no battery.
+    """
+    await device.send_data(groups=[build_group(3000, [1, 0, 0, 3295])])
+    await _settle(hass)
+
+    hub = setup_integration.runtime_data
+    inverter = hub.devices["inverter:SML0EXAMP2"]
+    assert inverter.profile == "protocol_ii_3000"
+
+    # An announce whose ranges would otherwise resolve to a storage profile.
+    await device.send_announce(groups=[build_group(3000, [0] * 125), build_group(3125, [0] * 125)])
+    await _settle(hass)
+
+    assert inverter.profile == "protocol_ii_3000", "the announce changed the profile"

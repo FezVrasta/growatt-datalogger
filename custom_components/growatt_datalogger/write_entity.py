@@ -1,15 +1,18 @@
 """Shared plumbing for the entities that write registers.
 
-Write entities differ from sensors in an awkward way: their value is not in the telemetry
-stream. A record carries input registers, while these live in the holding space, so the
-only way to know the current setting is to ask. That means:
+Write entities differ from sensors in where their value comes from. A telemetry record
+carries input registers; these settings live in the holding space. Fortunately an
+announce carries holding registers, so for most of them the device volunteers the current
+value every time it connects, and the entity simply reads it from the coordinator.
 
-* the value is read once when the device first connects, and again after each write;
-* until that read succeeds the entity reports ``unknown`` rather than inventing a value;
-* a write that the device rejects does not update the state.
+For a register no announce reports, the entity asks for it directly -- but only once a
+record has arrived, because entities are added during setup, before any datalogger has
+connected. Reading at add time talks to nothing, and as a one-shot it would never retry,
+leaving the entity unknown for good.
 
-Optimistic updates would be worse than useless here -- showing a battery cut-off the
-inverter never accepted is exactly the sort of thing someone builds an automation on.
+A write that the device rejects does not update the state. Optimistic updates would be
+worse than useless here: showing a battery cut-off the inverter never accepted is exactly
+the sort of thing someone builds an automation on.
 """
 
 from __future__ import annotations
@@ -30,7 +33,7 @@ from .hub import GrowattDevice, GrowattHub
 from .metadata import pretty
 from .protocol import commands
 from .protocol.errors import CommandTimeout
-from .registers.writable import WritableRegister, WriteKind, for_profile
+from .registers.writable import Encoding, WritableRegister, WriteKind, for_profile
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -83,6 +86,7 @@ class GrowattWriteEntity(GrowattEntity):
         self._attr_icon = spec.icon
         self._attr_entity_registry_enabled_default = spec.enabled_default
         self._current: Any = None
+        self._refresh_requested = False
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -94,16 +98,50 @@ class GrowattWriteEntity(GrowattEntity):
             "source": self.spec.source,
         }
 
+    @property
+    def _reported(self) -> Any | None:
+        """This register's value as the device itself last reported it.
+
+        An announce carries holding registers, which is where these settings live, so
+        for most of them the device volunteers the current value every time it connects
+        -- no command round-trip needed, and it refreshes itself.
+
+        Only unscaled encodings are taken this way. A scaled one would already have been
+        divided by the register table, and running it through :meth:`decode` again would
+        scale it twice.
+        """
+        if self.spec.encoding not in (Encoding.RAW, Encoding.BOOL):
+            return None
+        value = (self.coordinator.data or {}).get(self.spec.key)
+        if not isinstance(value, int):
+            return None
+        return self.spec.decode(value)
+
+    @property
+    def _state(self) -> Any | None:
+        """What to display: the device's own report, else our last read or write."""
+        reported = self._reported
+        return self._current if reported is None else reported
+
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        # Deliberately not awaited. Commands are serialised per connection, so awaiting
-        # the initial read here would make platform setup take one command round-trip
-        # per entity -- and a full command timeout each, if the device is unreachable.
-        # The entity simply reports unknown until its value arrives.
-        self.hass.async_create_background_task(
-            self._async_refresh(),
-            name=f"growatt refresh {self.device.serial} {self.spec.key}",
-        )
+        # No read here. Entities are added during setup, before any datalogger has
+        # connected, so a read at this point has nothing to talk to and -- being a
+        # one-shot -- would never be retried, leaving the entity unknown for good. The
+        # value comes from the announce instead, and _handle_coordinator_update asks
+        # explicitly only for the registers an announce does not carry.
+        self._refresh_requested = False
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        # A record has arrived, so the device is connected and a command can be sent.
+        if not self._refresh_requested and self._reported is None and self._current is None:
+            self._refresh_requested = True
+            self.hass.async_create_background_task(
+                self._async_refresh(),
+                name=f"growatt read {self.device.serial} {self.spec.key}",
+            )
+        super()._handle_coordinator_update()
 
     async def _async_refresh(self) -> None:
         """Read the register back. Leaves the value unknown if it cannot be read."""
@@ -166,8 +204,4 @@ class GrowattWriteEntity(GrowattEntity):
         parent = self.device.parent
         if parent is None:
             return None
-        serial = self.hub.devices[parent].serial
-        for session in self.hub.sessions:
-            if session.datalogger_serial == serial:
-                return session
-        return None
+        return self.hub.session_for(self.hub.devices[parent].serial)

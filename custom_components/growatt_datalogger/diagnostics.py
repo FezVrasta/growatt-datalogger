@@ -52,9 +52,17 @@ async def async_get_config_entry_diagnostics(
         for session in hub.sessions
     ]
 
+    # What each device's entities actually read from. Without this, a sensor stuck on
+    # "unknown" is indistinguishable from one whose value simply is not being published.
+    coordinator_data = {
+        key: {name: value for name, value in (coordinator.data or {}).items()}
+        for key, coordinator in hub.coordinators.items()
+    }
+
     return async_redact_data(
         {
             "port": hub.port,
+            "coordinator_data": coordinator_data,
             "options": dict(entry.options),
             "devices": devices,
             "sessions": sessions,

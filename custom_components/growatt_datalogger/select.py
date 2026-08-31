@@ -29,7 +29,7 @@ class GrowattSelect(GrowattWriteEntity, SelectEntity):
     def current_option(self) -> str | None:
         # None when the device reported a word outside the known options, rather than
         # guessing at a label.
-        return self._current
+        return self._state
 
     async def async_select_option(self, option: str) -> None:
         await self._async_write(option)

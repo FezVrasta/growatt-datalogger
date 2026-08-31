@@ -57,10 +57,7 @@ class GrowattSyncTime(GrowattEntity, ButtonEntity):
         super().__init__(hub, device, SYNC_TIME)
 
     async def async_press(self) -> None:
-        session = next(
-            (s for s in self.hub.sessions if s.datalogger_serial == self.device.serial),
-            None,
-        )
+        session = self.hub.session_for(self.device.serial)
         if session is None:
             raise HomeAssistantError(f"{self.device.serial} is not connected")
 

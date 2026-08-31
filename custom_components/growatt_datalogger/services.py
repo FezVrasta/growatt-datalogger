@@ -119,9 +119,8 @@ def _resolve(hass: HomeAssistant, device_id: str) -> tuple[GrowattHub, str]:
 
 
 def _session(hub: GrowattHub, serial: str) -> Any:
-    for session in hub.sessions:
-        if session.datalogger_serial == serial:
-            return session
+    if (session := hub.session_for(serial)) is not None:
+        return session
     raise HomeAssistantError(f"Datalogger {serial} is not currently connected")
 
 

@@ -54,6 +54,14 @@ class ServerConfig:
     read_size: int = 4096
     shutdown_timeout: float = 5.0
 
+    push_time_on_announce: bool = True
+    """Set the device's clock when it announces itself.
+
+    On by default because a datalogger expects it: without it the device announces,
+    waits, gives up and reconnects, never sending a telemetry record. Configurable
+    mainly so tests can drive a session without a clock update in flight.
+    """
+
     relay: RelayConfig | None = None
     """When set, each connection is mirrored to the Growatt cloud.
 
@@ -168,6 +176,7 @@ class GrowattServer:
             on_record=self._on_record,
             on_identify=self._on_identify,
         )
+        session.push_time_on_announce = self.config.push_time_on_announce
 
         relay: RelayConnection | None = None
         if self.config.relay is not None:

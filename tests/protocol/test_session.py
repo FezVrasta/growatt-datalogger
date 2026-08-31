@@ -21,6 +21,7 @@ def make_session(**kwargs: object) -> tuple[Session, list[bytes], list[Record]]:
         sent.append(data)
 
     session = Session(1, send=send, on_record=records.append, **kwargs)  # type: ignore[arg-type]
+    session.push_time_on_announce = False
     return session, sent, records
 
 
@@ -120,6 +121,7 @@ async def test_announce_identifies_the_device() -> None:
         pass
 
     session = Session(1, send=send, on_identify=lambda *args: seen.append(args))
+    session.push_time_on_announce = False
     await session.handle_frame(Frame(build_data_record(function=0x03)))
 
     assert seen == [("GPG0AAAAA1", "SML0BBBBB2", 6)]

@@ -44,6 +44,7 @@ async def _serve_reads(device: FakeDatalogger, count: int, value: int = 0) -> No
         body = (
             SERIAL.encode().ljust(30, b"\x00")
             + register.to_bytes(2, "big")
+            + register.to_bytes(2, "big")  # reads echo the range
             + value.to_bytes(2, "big")
         )
         await device.send_raw(
@@ -243,3 +244,42 @@ async def test_the_sync_time_button_sets_the_clock(
     body = SERIAL.encode().ljust(30, b"\x00") + (0x1F).to_bytes(2, "big") + b"\x00"
     await device.send_raw(build_frame(body, protocol=6, function=0x18, sequence=request.sequence))
     await asyncio.wait_for(call, 5)
+
+
+async def test_a_write_entity_takes_its_value_from_the_announce(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, device: FakeDatalogger
+) -> None:
+    """No command round-trip needed for a register the device already reports.
+
+    These settings live in the holding space, which is exactly what an announce carries,
+    so the device volunteers them on every connection.
+    """
+    await device.send_data(groups=[build_group(3000, [1, 0, 0, 3295])])
+    await _settle(hass)
+    # Holding register 3 is the output power limit; the announce reports it as 100%.
+    await device.send_announce(groups=[build_group(0, [1, 0, 0, 100])])
+    await _settle(hass)
+
+    registry = er.async_get(hass)
+    entity_id = registry.async_get_entity_id(
+        "number", DOMAIN, f"{DOMAIN}_inverter:{INVERTER}_output_power_limit"
+    )
+    assert entity_id is not None
+    assert float(hass.states.get(entity_id).state) == 100
+
+
+async def test_a_switch_is_known_once_the_device_reports_it(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, device: FakeDatalogger
+) -> None:
+    """An unknown switch renders as two buttons rather than a toggle, so this matters."""
+    await device.send_data(groups=[build_group(3000, [1, 0, 0, 3295])])
+    await _settle(hass)
+    await device.send_announce(groups=[build_group(0, [1, 0, 0, 100])])
+    await _settle(hass)
+
+    registry = er.async_get(hass)
+    entity_id = registry.async_get_entity_id(
+        "switch", DOMAIN, f"{DOMAIN}_inverter:{INVERTER}_inverter_enabled"
+    )
+    assert entity_id is not None
+    assert hass.states.get(entity_id).state == "on"

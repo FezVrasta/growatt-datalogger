@@ -24,7 +24,7 @@ async def async_setup_entry(
 class GrowattSwitch(GrowattWriteEntity, SwitchEntity):
     @property
     def is_on(self) -> bool | None:
-        return self._current
+        return self._state
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         await self._async_write(True)

@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from .errors import FrameError
 from .framing import DEFAULT_MAX_FRAME, Framer
 from .records import Frame
+from .relay import RelayConfig, RelayConnection
 from .session import Record, Session, gather_cancelled
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,12 +54,20 @@ class ServerConfig:
     read_size: int = 4096
     shutdown_timeout: float = 5.0
 
+    relay: RelayConfig | None = None
+    """When set, each connection is mirrored to the Growatt cloud.
+
+    Off by default: the point of this integration is that nothing has to leave the
+    network. It exists for people who want to keep the ShinePhone app working.
+    """
+
 
 @dataclass(slots=True)
 class ServerStats:
     connections_accepted: int = 0
     connections_active: int = 0
     framing_errors: int = 0
+    relay_failures: int = 0
 
 
 class GrowattServer:
@@ -79,6 +88,7 @@ class GrowattServer:
 
         self.stats = ServerStats()
         self.sessions: dict[int, Session] = {}
+        self.relays: dict[int, RelayConnection | None] = {}
 
         self._server: asyncio.Server | None = None
         self._tasks: set[asyncio.Task[None]] = set()
@@ -159,6 +169,15 @@ class GrowattServer:
             on_identify=self._on_identify,
         )
 
+        relay: RelayConnection | None = None
+        if self.config.relay is not None:
+            relay = RelayConnection(self.config.relay, lambda data: self._send(writer, data))
+            # Growatt answers while the relay is healthy; exactly one of us must.
+            session.suppress_replies = await relay.start()
+            if not session.suppress_replies:
+                self.stats.relay_failures += 1
+        self.relays[connection_id] = relay
+
         self.sessions[connection_id] = session
         self.stats.connections_accepted += 1
         self.stats.connections_active += 1
@@ -166,7 +185,7 @@ class GrowattServer:
         self._notify(session, True)
 
         try:
-            await self._read_loop(reader, framer, session)
+            await self._read_loop(reader, framer, session, relay)
         except TimeoutError:
             _LOGGER.info(
                 "connection %s: no data for %.0fs, closing",
@@ -186,6 +205,9 @@ class GrowattServer:
         except Exception:
             _LOGGER.exception("connection %s failed", connection_id)
         finally:
+            if relay is not None:
+                await relay.close()
+            self.relays.pop(connection_id, None)
             session.close()
             self.sessions.pop(connection_id, None)
             self.stats.connections_active -= 1
@@ -198,7 +220,11 @@ class GrowattServer:
             _LOGGER.debug("connection %s closed", connection_id)
 
     async def _read_loop(
-        self, reader: asyncio.StreamReader, framer: Framer, session: Session
+        self,
+        reader: asyncio.StreamReader,
+        framer: Framer,
+        session: Session,
+        relay: RelayConnection | None,
     ) -> None:
         while True:
             data = await asyncio.wait_for(
@@ -206,6 +232,19 @@ class GrowattServer:
             )
             if not data:
                 return
+
+            if relay is not None:
+                # Upstream first, before anything parses these bytes: the cloud must
+                # never wait on our decoder, and a decode bug must not break the relay.
+                relay.forward(data)
+                if relay.degraded and session.suppress_replies:
+                    # Upstream is gone. Take over now rather than leaving the device
+                    # unacknowledged; we keep answering for the rest of this connection.
+                    session.suppress_replies = False
+                    _LOGGER.info(
+                        "connection %s: acknowledging locally after relay failure",
+                        session.connection_id,
+                    )
 
             for raw in framer.feed(data):
                 await session.handle_frame(Frame(raw))

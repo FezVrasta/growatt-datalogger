@@ -25,9 +25,15 @@ from .const import (
     BUFFERED_IGNORE,
     CONF_BUFFERED_POLICY,
     CONF_INCLUDE_UNKNOWN,
+    CONF_RELAY_ENABLED,
+    CONF_RELAY_HOST,
+    CONF_RELAY_PORT,
     DEFAULT_BUFFERED_POLICY,
     DEFAULT_INCLUDE_UNKNOWN,
     DEFAULT_PORT,
+    DEFAULT_RELAY_ENABLED,
+    DEFAULT_RELAY_HOST,
+    DEFAULT_RELAY_PORT,
     DOMAIN,
 )
 
@@ -104,6 +110,18 @@ class GrowattOptionsFlow(OptionsFlowWithReload):
                         CONF_BUFFERED_POLICY,
                         default=options.get(CONF_BUFFERED_POLICY, DEFAULT_BUFFERED_POLICY),
                     ): vol.In([BUFFERED_EVENT, BUFFERED_IGNORE]),
+                    vol.Required(
+                        CONF_RELAY_ENABLED,
+                        default=options.get(CONF_RELAY_ENABLED, DEFAULT_RELAY_ENABLED),
+                    ): cv.boolean,
+                    vol.Required(
+                        CONF_RELAY_HOST,
+                        default=options.get(CONF_RELAY_HOST, DEFAULT_RELAY_HOST),
+                    ): cv.string,
+                    vol.Required(
+                        CONF_RELAY_PORT,
+                        default=options.get(CONF_RELAY_PORT, DEFAULT_RELAY_PORT),
+                    ): cv.port,
                 }
             ),
         )

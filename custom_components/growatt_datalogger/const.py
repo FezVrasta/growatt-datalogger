@@ -8,7 +8,15 @@ from homeassistant.const import Platform
 
 DOMAIN: Final = "growatt_datalogger"
 
-PLATFORMS: Final = [Platform.BINARY_SENSOR, Platform.SENSOR]
+PLATFORMS: Final = [
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+    Platform.NUMBER,
+    Platform.SELECT,
+    Platform.SENSOR,
+    Platform.SWITCH,
+    Platform.TIME,
+]
 
 # Configuration ---------------------------------------------------------------
 
@@ -24,8 +32,21 @@ CONF_INCLUDE_UNKNOWN: Final = "include_unknown"
 
 CONF_BUFFERED_POLICY: Final = "buffered_policy"
 
+CONF_RELAY_ENABLED: Final = "relay_enabled"
+"""Mirror every connection to the Growatt cloud so ShinePhone keeps working.
+
+Off by default. The premise of this integration is that nothing has to leave the
+network; this exists for people who want the app as well.
+"""
+
+CONF_RELAY_HOST: Final = "relay_host"
+CONF_RELAY_PORT: Final = "relay_port"
+
 DEFAULT_PORT: Final = 5279
 DEFAULT_INCLUDE_UNKNOWN: Final = False
+DEFAULT_RELAY_ENABLED: Final = False
+DEFAULT_RELAY_HOST: Final = "server.growatt.com"
+DEFAULT_RELAY_PORT: Final = 5279
 
 # Buffered-record handling ----------------------------------------------------
 
@@ -61,3 +82,4 @@ VALUE_DECODE_ERRORS: Final = "decode_errors"
 VALUE_CRC_MISMATCHES: Final = "crc_mismatches"
 VALUE_BUFFERED_RECORDS: Final = "buffered_records"
 VALUE_PROFILE: Final = "profile"
+VALUE_RELAY_CONNECTED: Final = "cloud_relay"

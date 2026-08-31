@@ -38,13 +38,50 @@ async def _announced_device_id(
     return entry.id
 
 
-async def _answer(device: FakeDatalogger, function: int, register: int, tail: bytes) -> None:
-    """Play the device's side: read the request, send a matching reply."""
-    request = await device.read_frame()
-    body = SERIAL.encode().ljust(30, b"\x00") + register.to_bytes(2, "big") + tail
-    await device.send_raw(
-        build_frame(body, protocol=6, function=function, sequence=request.sequence)
-    )
+async def _answer(
+    device: FakeDatalogger, function: int, register: int, tail: bytes, *, tries: int = 12
+) -> None:
+    """Play the device's side: wait for the request we care about, then reply.
+
+    Write entities read their registers back in the background when they are added, so
+    the frame arriving next is not necessarily the one the test asked for. Answer the
+    others with a benign value and keep looking.
+    """
+    for _ in range(tries):
+        request = await device.read_frame(timeout=2.0)
+        got = int.from_bytes(request.body[30:32], "big")
+
+        if request.function == function and got == register:
+            body = SERIAL.encode().ljust(30, b"\x00") + register.to_bytes(2, "big") + tail
+            await device.send_raw(
+                build_frame(body, protocol=6, function=function, sequence=request.sequence)
+            )
+            return
+
+        # Some other entity's read-back. Answer it so it does not block the lock.
+        body = SERIAL.encode().ljust(30, b"\x00") + got.to_bytes(2, "big") + (0).to_bytes(2, "big")
+        await device.send_raw(
+            build_frame(body, protocol=6, function=request.function, sequence=request.sequence)
+        )
+    raise AssertionError(f"never saw a {function:#04x} request for register {register}")
+
+
+async def _await_request(device: FakeDatalogger, function: int, *, tries: int = 12) -> object:
+    """Return the first request with ``function``, answering anything else on the way."""
+    for _ in range(tries):
+        request = await device.read_frame(timeout=2.0)
+        if request.function == function:
+            return request
+        register = int.from_bytes(request.body[30:32], "big")
+        body = (
+            SERIAL.encode().ljust(30, b"\x00")
+            + register.to_bytes(2, "big")
+            + (0).to_bytes(2, "big")
+        )
+        await device.send_raw(
+            build_frame(body, protocol=6, function=request.function, sequence=request.sequence)
+        )
+    raise AssertionError(f"never saw a {function:#04x} request")
 
 
 async def test_read_register_returns_the_value(
@@ -52,20 +89,22 @@ async def test_read_register_returns_the_value(
 ) -> None:
     device_id = await _announced_device_id(hass, device)
 
+    # Register 45 deliberately: a write entity also reads register 3, and two identical
+    # requests on the wire would be indistinguishable to the test's responder.
     call = asyncio.create_task(
         hass.services.async_call(
             DOMAIN,
             "read_register",
-            {"device_id": device_id, "register": 3},
+            {"device_id": device_id, "register": 45},
             blocking=True,
             return_response=True,
         )
     )
     await asyncio.sleep(0.05)
-    await _answer(device, 0x05, 3, (1234).to_bytes(2, "big"))
+    await _answer(device, 0x05, 45, (1234).to_bytes(2, "big"))
 
     result = await asyncio.wait_for(call, 5)
-    assert result["register"] == 3
+    assert result["register"] == 45
     assert result["value"] == 1234
 
 
@@ -133,8 +172,7 @@ async def test_sync_time_sets_the_clock(
     )
     await asyncio.sleep(0.05)
 
-    request = await device.read_frame()
-    assert request.function == 0x18
+    request = await _await_request(device, 0x18)
     # register 0x1f, then a 19-byte ASCII timestamp
     assert request.body[30:32] == (0x1F).to_bytes(2, "big")
     assert request.body[32:34] == (19).to_bytes(2, "big")
@@ -166,8 +204,14 @@ async def test_an_inverter_device_resolves_through_its_datalogger(
     hass: HomeAssistant, setup_integration: MockConfigEntry, device: FakeDatalogger
 ) -> None:
     """Commands always travel over the datalogger's connection."""
+    # Announce once; both devices come from that single record. Announcing twice would
+    # leave an extra acknowledgement on the wire for the responder to trip over.
     await _announced_device_id(hass, device)
-    inverter_id = await _announced_device_id(hass, device, kind="inverter")
+
+    registry = dr.async_get(hass)
+    inverter = registry.async_get_device({(DOMAIN, "inverter:SML0EXAMP2")})
+    assert inverter is not None
+    inverter_id = inverter.id
 
     call = asyncio.create_task(
         hass.services.async_call(

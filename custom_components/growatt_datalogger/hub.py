@@ -24,8 +24,13 @@ from .const import (
     CONF_BUFFERED_POLICY,
     CONF_INCLUDE_UNKNOWN,
     CONF_PROFILE_OVERRIDES,
+    CONF_RELAY_ENABLED,
+    CONF_RELAY_HOST,
+    CONF_RELAY_PORT,
     DEFAULT_BUFFERED_POLICY,
     DEFAULT_INCLUDE_UNKNOWN,
+    DEFAULT_RELAY_HOST,
+    DEFAULT_RELAY_PORT,
     DOMAIN,
     EVENT_BUFFERED_RECORD,
     KIND_DATALOGGER,
@@ -41,6 +46,7 @@ from .const import (
     VALUE_PROFILE,
     VALUE_RECORDS,
 )
+from .protocol.relay import RelayConfig
 from .protocol.server import GrowattServer, ServerConfig
 from .protocol.session import Record, Session
 from .registers import RegisterSpace, decode_registers, resolve_profile
@@ -103,8 +109,17 @@ class GrowattHub:
         self._store: Store[dict[str, Any]] = Store(
             hass, STORAGE_VERSION, f"{STORAGE_KEY}.{entry.entry_id}"
         )
+        options = {**entry.data, **entry.options}
+        relay = (
+            RelayConfig(
+                host=options.get(CONF_RELAY_HOST, DEFAULT_RELAY_HOST),
+                port=options.get(CONF_RELAY_PORT, DEFAULT_RELAY_PORT),
+            )
+            if options.get(CONF_RELAY_ENABLED)
+            else None
+        )
         self._server = GrowattServer(
-            ServerConfig(port=port),
+            ServerConfig(port=port, relay=relay),
             on_record=self._handle_record,
             on_connection_change=self._handle_connection_change,
         )

@@ -86,11 +86,11 @@ await device.send_data()
 `FakeUpstream` stands in for the Growatt cloud, and can be killed mid-session to exercise
 relay fallback.
 
-## Licence
+## License
 
 MIT, except the register definitions under `registers/`, which are Apache-2.0 and derived
 from
 [`Homeassistant-Growatt-Local-Modbus`](https://github.com/WouterTuinstra/Homeassistant-Growatt-Local-Modbus).
 See `NOTICE`. This project is **not** derived from `johanmeijer/grott`, which carries no
-licence; full provenance is recorded in the
+license; full provenance is recorded in the
 [repository](https://github.com/FezVrasta/growatt-datalogger/blob/main/PROVENANCE.md).

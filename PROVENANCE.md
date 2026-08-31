@@ -1,6 +1,6 @@
 # Provenance
 
-This file records, per component, where the knowledge and code came from and under which licence.
+This file records, per component, where the knowledge and code came from and under which license.
 It exists so that the origin of every part of this project is verifiable from the repository
 itself rather than from memory.
 
@@ -14,14 +14,14 @@ This project is an independent implementation of the Growatt datalogger upload p
 3. Packet captures taken by the author from their own hardware.
 
 **It is not derived from [`johanmeijer/grott`](https://github.com/johanmeijer/grott).** That project
-carries no licence file, which under default copyright means all rights are reserved. Its author has
+carries no license file, which under default copyright means all rights are reserved. Its author has
 publicly declined to add one
 ([grott#512](https://github.com/johanmeijer/grott/issues/512)). No grott code, data table,
 identifier name, or file layout is reproduced here.
 
 ## Sources
 
-| Component | Derived from | Licence | Notes |
+| Component | Derived from | License | Notes |
 |---|---|---|---|
 | `growatt_protocol/crc.py` | CRC-16/MODBUS is a published algorithm (reflected polynomial `0xA001`, init `0xFFFF`). Implemented from the algorithm definition. | n/a — algorithm | Growatt appends the checksum big-endian, unlike Modbus RTU serial framing. Verified against the standard `"123456789"` → `0x4B37` vector. |
 | `growatt_protocol/crypt.py` | Protocol description in [nwf's Growatt protocol notes](https://www.ietfng.org/nwf/misc/growatt-protocol.html) (prose) and [`aaronjbrown/PyGrowatt`](https://github.com/aaronjbrown/PyGrowatt) | BSD-3-Clause | XOR with the repeating ASCII key `Growatt`, applied from byte offset 8 onward. |
@@ -72,4 +72,4 @@ someone can judge a register's provenance without reading this file.
   grott's field names.
 - Nothing in `growatt-protocol` imports Home Assistant or anything outside the standard library;
   that is enforced by a test. The package is separately published and separately auditable, so a
-  reader can check the licence position of the protocol work without reading the integration.
+  reader can check the license position of the protocol work without reading the integration.

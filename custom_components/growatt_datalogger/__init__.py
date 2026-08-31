@@ -33,6 +33,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: GrowattConfigEntry) -> b
 
     from .const import DEFAULT_PORT, PLATFORMS
     from .hub import GrowattHub
+    from .services import async_register_services
 
     port = entry.data.get(CONF_PORT, DEFAULT_PORT)
     hub = GrowattHub(hass, entry, port)
@@ -56,6 +57,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: GrowattConfigEntry) -> b
     # The server must be listening before platforms are set up, so a record arriving
     # during setup finds its coordinator already in place.
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Domain-wide rather than per-entry, and idempotent: only one entry is allowed, but
+    # re-registering on a reload is harmless and keeps the services available.
+    async_register_services(hass)
 
     # No update listener here on purpose: the options flow is an OptionsFlowWithReload,
     # which reloads the entry itself. Registering both is rejected by Home Assistant.

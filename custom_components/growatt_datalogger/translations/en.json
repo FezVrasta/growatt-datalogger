@@ -46,5 +46,65 @@
         "ignore": "Ignore"
       }
     }
+  },
+  "services": {
+    "read_register": {
+      "name": "Read register",
+      "description": "Read a Modbus register from an inverter or a datalogger parameter, and return its value.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The Growatt device to read from."
+        },
+        "target": {
+          "name": "Target",
+          "description": "Whether the register belongs to the inverter or to the datalogger itself."
+        },
+        "register": {
+          "name": "Register",
+          "description": "Register number to read."
+        },
+        "end_register": {
+          "name": "End register",
+          "description": "Read a contiguous range ending here. Inverter targets only."
+        }
+      }
+    },
+    "write_register": {
+      "name": "Write register",
+      "description": "Write a Modbus register. Register meanings vary by model and firmware; a wrong write can misconfigure the inverter, so anything outside a small allowlist needs Confirm.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The Growatt device to write to."
+        },
+        "target": {
+          "name": "Target",
+          "description": "Whether the register belongs to the inverter or to the datalogger itself."
+        },
+        "register": {
+          "name": "Register",
+          "description": "Register number to write."
+        },
+        "value": {
+          "name": "Value",
+          "description": "A number for inverter registers, or text for datalogger parameters."
+        },
+        "confirm": {
+          "name": "Confirm",
+          "description": "Required for registers outside the known-safe list."
+        }
+      }
+    },
+    "sync_time": {
+      "name": "Sync time",
+      "description": "Set the datalogger's clock to Home Assistant's local time.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The datalogger whose clock to set."
+        }
+      }
+    }
   }
 }

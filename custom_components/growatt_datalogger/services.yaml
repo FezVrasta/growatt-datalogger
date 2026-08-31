@@ -1,0 +1,69 @@
+read_register:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: growatt_datalogger
+    target:
+      default: inverter
+      selector:
+        select:
+          options:
+            - inverter
+            - datalogger
+    register:
+      required: true
+      example: 3
+      selector:
+        number:
+          min: 0
+          max: 65535
+          mode: box
+    end_register:
+      example: 10
+      selector:
+        number:
+          min: 0
+          max: 65535
+          mode: box
+
+write_register:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: growatt_datalogger
+    target:
+      default: inverter
+      selector:
+        select:
+          options:
+            - inverter
+            - datalogger
+    register:
+      required: true
+      example: 3
+      selector:
+        number:
+          min: 0
+          max: 65535
+          mode: box
+    value:
+      required: true
+      example: 100
+      selector:
+        text:
+    confirm:
+      default: false
+      selector:
+        boolean:
+
+sync_time:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: growatt_datalogger

@@ -14,12 +14,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from .commands import Command, CommandResponse, parse_command_response
 from .crc import check_crc
-from .errors import RecordError
+from .errors import CommandTimeout, RecordError
 from .records import (
     COMMAND_RESPONSE_FUNCTIONS,
     METER_FUNCTIONS,
@@ -35,6 +37,22 @@ from .records import (
 _LOGGER = logging.getLogger(__name__)
 
 SendCallback = Callable[[bytes], Awaitable[None]]
+
+#: Seconds to wait for a device to answer a command.
+DEFAULT_COMMAND_TIMEOUT = 8.0
+
+#: Pause between consecutive commands on one connection. These are small single-threaded
+#: devices fronting a serial Modbus bus; giving them a moment between requests avoids
+#: NAKs that would otherwise look like timeouts.
+DEFAULT_COMMAND_INTERVAL = 0.15
+
+#: Attempts for a read. Reads are idempotent, so retrying is free.
+READ_ATTEMPTS = 3
+
+#: A key identifying an outstanding command. The connection id rather than the serial:
+#: a device that reconnects gets a new id, so a reply from the previous socket can never
+#: satisfy a request made on the new one.
+PendingKey = tuple[int, int, int]  # (connection_id, response function, sequence)
 
 
 @dataclass(slots=True)
@@ -100,6 +118,15 @@ class Session:
         self.protocol: int | None = None
         self.last_seen: datetime | None = None
         self.closed = False
+
+        self.command_timeout = DEFAULT_COMMAND_TIMEOUT
+        self.command_interval = DEFAULT_COMMAND_INTERVAL
+
+        self._sequence = 0
+        self._pending: dict[PendingKey, asyncio.Future[CommandResponse]] = {}
+        self._pending_by_register: dict[tuple[int, int, int], asyncio.Future[CommandResponse]] = {}
+        self._command_lock = asyncio.Lock()
+        self._unsolicited: deque[CommandResponse] = deque(maxlen=32)
 
     # ------------------------------------------------------------------
     # Frame handling
@@ -207,24 +234,136 @@ class Session:
             except Exception:
                 _LOGGER.exception("connection %s: record handler failed", self.connection_id)
 
-    def _handle_command_response(self, frame: Frame) -> None:
-        """Placeholder until the command layer lands.
+    # ------------------------------------------------------------------
+    # Commands
+    # ------------------------------------------------------------------
 
-        Kept as a distinct branch so these frames are never acknowledged by accident.
+    def _next_sequence(self) -> int:
+        """Allocate a sequence number not currently outstanding.
+
+        A real counter, unlike implementations that leave it pinned at 1 and then have
+        nothing to correlate replies against. Zero and 0xFFFF are avoided because
+        devices have been seen using them as sentinels.
         """
-        _LOGGER.debug(
-            "connection %s: unsolicited %#04x response",
-            self.connection_id,
-            frame.function,
-        )
+        for _ in range(0xFFFE):
+            self._sequence = (self._sequence % 0xFFFD) + 1
+            if not any(key[2] == self._sequence for key in self._pending):
+                return self._sequence
+        raise RuntimeError("no free sequence numbers")
+
+    async def send_command(
+        self, command: Command, *, timeout: float | None = None
+    ) -> CommandResponse:
+        """Send ``command`` and wait for the device's reply.
+
+        One command in flight per connection. These are single-threaded devices fronting
+        a physically serial Modbus bus, so pipelining buys nothing and costs correctness:
+        serialising also makes the register fallback below unambiguous.
+        """
+        if self.closed:
+            raise ConnectionError("the datalogger is not connected")
+        if self.protocol is None or self.datalogger_serial is None:
+            raise ConnectionError("the datalogger has not identified itself yet")
+
+        async with self._command_lock:
+            response = await self._send_once(command, timeout or self.command_timeout)
+            if self.command_interval:
+                await asyncio.sleep(self.command_interval)
+            return response
+
+    async def _send_once(self, command: Command, timeout: float) -> CommandResponse:
+        sequence = self._next_sequence()
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[CommandResponse] = loop.create_future()
+
+        key = (self.connection_id, command.response_function, sequence)
+        # It is not established that every firmware echoes the request's sequence, so a
+        # second index on the register number acts as a fallback. Because commands are
+        # serialised, at most one request can match it at a time. The DEBUG line below
+        # fires when the fallback is used; once that is seen (or not) on real hardware,
+        # one of the two indexes can go.
+        register_key = (self.connection_id, command.response_function, command.register)
+        self._pending[key] = future
+        self._pending_by_register[register_key] = future
+
+        try:
+            assert self.protocol is not None
+            await self._send(command.build(sequence, self.protocol))
+            return await asyncio.wait_for(future, timeout)
+        except TimeoutError:
+            raise CommandTimeout(
+                f"no reply to {command.function:#04x} for register {command.register} "
+                f"(sequence {sequence})"
+            ) from None
+        finally:
+            self._pending.pop(key, None)
+            self._pending_by_register.pop(register_key, None)
+
+    def _handle_command_response(self, frame: Frame) -> None:
+        """Match a reply to the command that is waiting for it."""
+        try:
+            response = parse_command_response(frame)
+        except RecordError as error:
+            _LOGGER.warning(
+                "connection %s: unparseable %#04x response: %s",
+                self.connection_id,
+                frame.function,
+                error,
+            )
+            return
+
+        future = self._pending.get((self.connection_id, frame.function, frame.sequence))
+        if future is None and response.register is not None:
+            future = self._pending_by_register.get(
+                (self.connection_id, frame.function, response.register)
+            )
+            if future is not None:
+                _LOGGER.debug(
+                    "connection %s: %#04x reply carried sequence %s, matched on "
+                    "register %s instead",
+                    self.connection_id,
+                    frame.function,
+                    frame.sequence,
+                    response.register,
+                )
+
+        if future is None:
+            # Nothing is waiting. Either a late reply to a command that already timed
+            # out, or -- in relay mode -- a reply to something the cloud asked for.
+            self._unsolicited.append(response)
+            _LOGGER.debug(
+                "connection %s: unsolicited %#04x reply for register %s",
+                self.connection_id,
+                frame.function,
+                response.register,
+            )
+            return
+
+        if not future.done():
+            future.set_result(response)
+
+    @property
+    def unsolicited(self) -> tuple[CommandResponse, ...]:
+        """Recent replies nothing was waiting for, for diagnostics."""
+        return tuple(self._unsolicited)
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     def close(self) -> None:
-        """Release everything tied to the connection."""
+        """Release everything tied to the connection.
+
+        Outstanding commands are failed rather than abandoned. A caller left awaiting a
+        future that will never resolve would hang until its own timeout -- during
+        shutdown, that means Home Assistant waiting on a dead socket.
+        """
         self.closed = True
+        for future in list(self._pending.values()):
+            if not future.done():
+                future.set_exception(ConnectionError("the datalogger disconnected"))
+        self._pending.clear()
+        self._pending_by_register.clear()
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return (

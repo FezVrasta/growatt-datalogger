@@ -26,7 +26,21 @@ Everything stays on your network, and it keeps working when your internet doesn'
 
 A device for your datalogger and one for each inverter behind it, with sensors for
 everything the inverter reports — PV strings, grid voltage and current, temperatures, and
-energy counters.
+energy counters. Settings the inverter accepts become controls you can change.
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/sensors.png" alt="Sensor list showing PV input power and energy, inverter temperatures, per-phase output voltage, amperage and power, and a Last record timestamp"></td>
+    <td width="50%"><img src="docs/images/configuration.png" alt="Configuration card with an AC charge switch, battery charge window times, stop-SOC numbers, a charge priority dropdown, an inverter enable switch and an output power limit"></td>
+  </tr>
+  <tr>
+    <td align="center"><em>What the inverter reports</em></td>
+    <td align="center"><em>What you can change</em></td>
+  </tr>
+</table>
+
+Sensors appear as the inverter reports them, so there is no list to configure and nothing
+to map by hand.
 
 Energy counters are classified so the **Energy Dashboard** works without templates or
 helpers. Just add the inverter under solar production.
@@ -36,8 +50,13 @@ stop reporting after sunset, and blanking every entity would put a gap in every 
 graph, every night. If you want to know whether data is still arriving, use the
 **Last record** sensor or the **Connected** binary sensor.
 
-You also get a **Sync time** button, a few inverter settings you can change, and services
-for reading or writing any register.
+**Connected** means "still sending", not "socket open". A datalogger dials in, uploads and
+hangs up every couple of minutes, so a sensor that followed the connection would flap all
+day on perfectly healthy hardware. It turns off after 15 minutes of silence instead, which
+makes it safe to alert on directly.
+
+You also get a **Sync time** button and services for reading or writing any register
+directly.
 
 ## Install
 

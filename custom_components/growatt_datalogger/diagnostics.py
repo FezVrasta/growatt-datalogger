@@ -1,0 +1,63 @@
+"""Diagnostics dump.
+
+The unnamed-register list is the useful part: it is exactly what someone needs to attach
+to an issue for a family this project does not yet decode.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from homeassistant.components.diagnostics import async_redact_data
+from homeassistant.core import HomeAssistant
+
+from . import GrowattConfigEntry
+
+#: Serial numbers identify a specific person's hardware, so they are redacted by default.
+TO_REDACT = {"serial", "serial_number", "datalogger", "inverter", "key", "parent"}
+
+
+async def async_get_config_entry_diagnostics(
+    hass: HomeAssistant, entry: GrowattConfigEntry
+) -> dict[str, Any]:
+    hub = entry.runtime_data
+
+    devices = [
+        {
+            "key": device.key,
+            "kind": device.kind,
+            "serial": device.serial,
+            "parent": device.parent,
+            "profile": device.profile,
+            "profile_confident": device.profile_confident,
+            "connected": device.connected,
+            "fields": sorted(device.fields),
+        }
+        for device in hub.devices.values()
+    ]
+
+    sessions = [
+        {
+            "connection_id": session.connection_id,
+            "protocol": session.protocol,
+            "records": session.stats.records,
+            "acknowledged": session.stats.acknowledged,
+            "pings": session.stats.pings,
+            "decode_errors": session.stats.decode_errors,
+            "crc_mismatches": session.stats.crc_mismatches,
+            "unknown_functions": {
+                f"{code:#04x}": count for code, count in session.stats.unknown_functions.items()
+            },
+        }
+        for session in hub.sessions
+    ]
+
+    return async_redact_data(
+        {
+            "port": hub.port,
+            "options": dict(entry.options),
+            "devices": devices,
+            "sessions": sessions,
+        },
+        TO_REDACT,
+    )

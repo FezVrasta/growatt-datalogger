@@ -1,0 +1,50 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Growatt Datalogger",
+        "description": "Home Assistant will listen for your Growatt datalogger on this port. After setup, open your datalogger's network settings, turn off domain-name resolution, and point its server address at this machine's IP on the same port.",
+        "data": {
+          "port": "Port"
+        },
+        "data_description": {
+          "port": "Growatt dataloggers use {port} by default. Only change this if something else on this machine already uses it."
+        }
+      }
+    },
+    "error": {
+      "port_in_use": "Something else is already listening on that port."
+    },
+    "abort": {
+      "single_instance_allowed": "Growatt Datalogger is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Growatt Datalogger options",
+        "data": {
+          "include_unknown": "Expose unrecognised registers",
+          "buffered_policy": "Historical records"
+        },
+        "data_description": {
+          "include_unknown": "Creates a disabled diagnostic sensor for every register this integration cannot name. Useful for adding support for a new inverter; noisy otherwise.",
+          "buffered_policy": "Records the datalogger replays after an outage carry a past timestamp, so they are never written to live sensors. 'event' fires growatt_datalogger_buffered_record for automations to consume; 'ignore' discards them."
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "port_in_use": {
+      "message": "Could not listen on port {port}: {error}. Home Assistant will keep retrying."
+    }
+  },
+  "selector": {
+    "buffered_policy": {
+      "options": {
+        "event": "Fire an event",
+        "ignore": "Ignore"
+      }
+    }
+  }
+}

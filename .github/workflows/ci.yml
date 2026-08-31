@@ -6,9 +6,11 @@ on:
   pull_request:
 
 jobs:
-  # The point of this job is the dependency list: pytest and hypothesis, nothing else.
-  # If the protocol layer ever grows a third-party or Home Assistant import, this fails.
-  protocol:
+  # The dependency list is the point of this job. It installs test tooling and nothing
+  # else -- no Home Assistant, no third-party runtime libraries -- and runs the protocol
+  # and register suites plus the purity check. If the shipped code ever grows a
+  # dependency, this fails.
+  core:
     name: Protocol and registers (no dependencies)
     runs-on: ubuntu-latest
     steps:
@@ -18,6 +20,17 @@ jobs:
           python-version: "3.13"
       - run: pip install pytest pytest-asyncio hypothesis
       - run: python -m pytest tests/protocol tests/registers tests/test_purity.py -q
+
+  integration:
+    name: Home Assistant integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install pytest pytest-asyncio hypothesis pytest-homeassistant-custom-component
+      - run: python -m pytest tests -q
 
   lint:
     name: Lint
@@ -30,3 +43,19 @@ jobs:
       - run: pip install ruff
       - run: ruff check .
       - run: ruff format --check .
+
+  hassfest:
+    name: Hassfest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    name: HACS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hacs/action@main
+        with:
+          category: integration

@@ -265,6 +265,9 @@ def async_register_services(hass: HomeAssistant) -> None:
         What is left orphaned is the handful of days the target recorded under its own
         id, which is exactly the period the source was recording in parallel.
         """
+        # Recorder is an *after* dependency, never a hard one: this is the only thing
+        # here that needs it, and an integration that reads an inverter has no business
+        # refusing to load on a system that keeps no history.
         from homeassistant.components.recorder import get_instance
         from homeassistant.components.recorder.statistics import (
             STATISTIC_UNIT_TO_UNIT_CONVERTER,

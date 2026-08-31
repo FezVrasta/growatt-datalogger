@@ -1,6 +1,9 @@
 {
   "domain": "growatt_datalogger",
   "name": "Growatt Datalogger",
+  "after_dependencies": [
+    "recorder"
+  ],
   "codeowners": [
     "@FezVrasta"
   ],

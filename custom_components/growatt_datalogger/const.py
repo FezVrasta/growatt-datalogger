@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Final
 
 from homeassistant.const import Platform
@@ -67,6 +68,21 @@ SIGNAL_NEW_VALUES: Final = f"{DOMAIN}_new_values_{{entry_id}}_{{device_key}}"
 
 KIND_DATALOGGER: Final = "logger"
 KIND_INVERTER: Final = "inverter"
+
+# Connectivity ----------------------------------------------------------------
+
+#: How long a datalogger may go without delivering a record before it counts as
+#: offline. Generous on purpose: a datalogger holds no long-lived TCP session. It
+#: uploads, hangs up and redials every few minutes, so the socket being down says
+#: nothing about whether the device is healthy -- observed hardware drops it dozens
+#: of times an hour while delivering a record every nine seconds throughout. Only a
+#: silence far longer than that gap is evidence of an actual outage.
+CONNECTIVITY_GRACE: Final = timedelta(minutes=15)
+
+#: The connectivity sensor's state is a function of elapsed time, so something has to
+#: re-evaluate it when no record arrives to do so -- otherwise a device that vanishes
+#: stays "on" forever, holding the state it had when the last record came in.
+CONNECTIVITY_INTERVAL: Final = timedelta(seconds=60)
 
 # Storage ---------------------------------------------------------------------
 

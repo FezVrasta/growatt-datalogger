@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 
 import pytest
 from growatt_protocol.testing import FakeDatalogger
@@ -12,9 +13,19 @@ from homeassistant.const import CONF_PORT
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
-from custom_components.growatt_datalogger.const import DOMAIN
+from custom_components.growatt_datalogger.const import (
+    CONNECTIVITY_GRACE,
+    CONNECTIVITY_INTERVAL,
+    DOMAIN,
+    KIND_DATALOGGER,
+)
+from custom_components.growatt_datalogger.hub import device_key
 
 
 async def _settle(hass: HomeAssistant, times: int = 3) -> None:
@@ -130,21 +141,60 @@ async def test_a_second_inverter_appears_without_a_reload(
         await other.close()
 
 
-async def test_connectivity_sensor_tracks_the_link(
-    hass: HomeAssistant, setup_integration: MockConfigEntry, device: FakeDatalogger
-) -> None:
-    await device.send_data()
-    await _settle(hass)
-
-    entity_registry = er.async_get(hass)
-    entity_id = entity_registry.async_get_entity_id(
+async def _connectivity_entity(hass: HomeAssistant) -> str:
+    entity_id = er.async_get(hass).async_get_entity_id(
         "binary_sensor", DOMAIN, f"{DOMAIN}_logger:GPG0EXAMP1_connected"
     )
     assert entity_id is not None
+    return entity_id
+
+
+async def test_connectivity_survives_the_reconnect_gap(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, device: FakeDatalogger
+) -> None:
+    """Hanging up is normal, not an outage.
+
+    A datalogger uploads and closes the socket, over and over. Real hardware was
+    observed doing it dozens of times an hour while delivering a record every nine
+    seconds throughout, so a sensor that followed the socket would have been alarming
+    constantly about a device that was working perfectly.
+    """
+    await device.send_data()
+    await _settle(hass)
+
+    entity_id = await _connectivity_entity(hass)
     assert hass.states.get(entity_id).state == "on"
 
     await device.close()
     await _settle(hass, times=5)
+    assert hass.states.get(entity_id).state == "on"
+
+
+async def test_connectivity_goes_off_after_prolonged_silence(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, device: FakeDatalogger
+) -> None:
+    """The grace period has to end, and end without anything pushing to end it.
+
+    Ages the record rather than freezing the clock: freezegun patches
+    ``time.monotonic``, which is the asyncio event loop's own clock, so a frozen test
+    deadlocks the socket server the moment anything awaits.
+    """
+    await device.send_data()
+    await _settle(hass)
+    entity_id = await _connectivity_entity(hass)
+
+    await device.close()
+    await _settle(hass)
+    assert hass.states.get(entity_id).state == "on"
+
+    hub = setup_integration.runtime_data
+    logger = hub.devices[device_key(KIND_DATALOGGER, "GPG0EXAMP1")]
+    logger.last_record = dt_util.utcnow() - (CONNECTIVITY_GRACE + timedelta(minutes=1))
+
+    # Nothing arrives to announce the silence, so only the interval timer can notice it.
+    async_fire_time_changed(hass, dt_util.utcnow() + CONNECTIVITY_INTERVAL)
+    await hass.async_block_till_done()
+
     assert hass.states.get(entity_id).state == "off"
 
 

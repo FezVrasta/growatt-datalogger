@@ -63,7 +63,11 @@ class GrowattDevice:
     profile: str | None = None
     profile_confident: bool = True
     fields: set[str] = field(default_factory=set)
+    #: Whether a TCP session is open right now. Diagnostic only -- this flaps
+    #: constantly on real hardware, so it is not the connectivity signal.
     connected: bool = False
+    #: When this device last delivered a record. The basis of connectivity.
+    last_record: datetime | None = None
 
     @property
     def name(self) -> str:
@@ -246,6 +250,10 @@ class GrowattHub:
         logger_key = device_key(KIND_DATALOGGER, payload.datalogger_serial)
         logger_device = self._ensure_device(logger_key, KIND_DATALOGGER, payload.datalogger_serial)
         logger_device.connected = True
+        # Any record we could decode -- telemetry, announce, even a buffered catch-up --
+        # is proof the datalogger is alive and talking, so it counts towards liveness
+        # regardless of what happens to the values below.
+        logger_device.last_record = dt_util.utcnow()
 
         if record.buffered and self.buffered_policy == BUFFERED_IGNORE:
             return
@@ -341,7 +349,12 @@ class GrowattHub:
             totals[VALUE_DECODE_ERRORS] += session.stats.decode_errors
             totals[VALUE_CRC_MISMATCHES] += session.stats.crc_mismatches
 
-        self._publish(key, {**totals, VALUE_LAST_RECORD: dt_util.utcnow()})
+        # Deliberately the stored time rather than "now": this also runs when a session
+        # merely opens or closes, and stamping those would report a fresh record for a
+        # datalogger that had connected and then said nothing.
+        stamp = self.devices[key].last_record
+        extra = {VALUE_LAST_RECORD: stamp} if stamp is not None else {}
+        self._publish(key, {**totals, **extra})
 
     def _bump(self, key: str, name: str) -> None:
         current = (self.coordinators[key].data or {}).get(name, 0)

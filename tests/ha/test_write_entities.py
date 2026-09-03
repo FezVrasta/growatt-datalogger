@@ -89,6 +89,41 @@ def test_unverified_registers_are_only_offered_when_asked_for() -> None:
     assert "load_first_stop_soc" in opted_in
 
 
+def test_registers_are_each_named_once() -> None:
+    """A register with two keys is a transcription bug, not a design choice."""
+    registers = [spec.register for spec in WRITABLE]
+    assert len(registers) == len(set(registers))
+
+
+def test_grid_first_and_battery_first_scheduling_is_exposed() -> None:
+    """The full storage priority-set block, not just SOC and the slot-1 window.
+
+    See https://github.com/FezVrasta/growatt-datalogger/issues/1.
+    """
+    keys = {spec.key for spec in for_profile("storage_1000")}
+    for key in (
+        "grid_first_discharge_power_rate",
+        "grid_first_start_time",
+        "grid_first_stop_time",
+        "grid_first_enabled",
+        "grid_first_start_time_2",
+        "grid_first_stop_time_2",
+        "grid_first_enabled_2",
+        "grid_first_start_time_3",
+        "grid_first_stop_time_3",
+        "grid_first_enabled_3",
+        "battery_first_charge_power_rate",
+        "battery_first_enabled",
+        "battery_first_start_time_2",
+        "battery_first_stop_time_2",
+        "battery_first_enabled_2",
+        "battery_first_start_time_3",
+        "battery_first_stop_time_3",
+        "battery_first_enabled_3",
+    ):
+        assert key in keys, key
+
+
 # ----------------------------------------------------------------------------------
 # Encoding
 # ----------------------------------------------------------------------------------

@@ -22,6 +22,8 @@ server: you point the datalogger at Home Assistant, and it uploads there instead
 
 Everything stays on your network, and it keeps working when your internet doesn't.
 
+Why this exists instead of using Grott: [fezvrasta.github.io/blog/replacing-grott](https://fezvrasta.github.io/blog/replacing-grott).
+
 ## What you get
 
 A device for your datalogger and one for each inverter behind it, with sensors for

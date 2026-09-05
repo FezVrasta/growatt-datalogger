@@ -16,6 +16,7 @@ from growatt_protocol import GrowattServer, Record, RelayConfig, ServerConfig, S
 from growatt_protocol.registers import RegisterSpace, decode_registers, resolve_profile
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
@@ -35,8 +36,10 @@ from .const import (
     DEFAULT_RELAY_PORT,
     DOMAIN,
     EVENT_BUFFERED_RECORD,
+    ISSUE_UNCONFIDENT_PROFILE,
     KIND_DATALOGGER,
     KIND_INVERTER,
+    LEARN_MORE_URL,
     SIGNAL_NEW_DEVICE,
     STORAGE_KEY,
     STORAGE_SAVE_DELAY,
@@ -108,6 +111,9 @@ class GrowattHub:
         self.entry = entry
         self.devices: dict[str, GrowattDevice] = {}
         self.coordinators: dict[str, GrowattCoordinator] = {}
+        #: Repair state we have already applied, by issue id. Records arrive every few
+        #: seconds; without this the issue registry would be rewritten on every one.
+        self._issues: dict[str, bool] = {}
         self._store: Store[dict[str, Any]] = Store(
             hass, STORAGE_VERSION, f"{STORAGE_KEY}.{entry.entry_id}"
         )
@@ -308,16 +314,24 @@ class GrowattHub:
         # makes the record look like a hybrid's. Letting it vote flips the profile on
         # every announce, which churns the stored value and creates battery entities for
         # a device that has no battery.
-        if space is RegisterSpace.INPUT and inverter.profile != match.profile.key:
-            _LOGGER.info(
-                "%s: using profile %s (%s)",
-                inverter_serial,
-                match.profile.key,
-                match.reason,
-            )
-            inverter.profile = match.profile.key
-            inverter.profile_confident = match.confident
-            self._schedule_save()
+        if space is RegisterSpace.INPUT:
+            # Confidence is compared as well as the key. Pinning a profile that inference
+            # had already guessed changes only the confidence, and if that did not count
+            # as a change the repair issue would never clear.
+            if (
+                inverter.profile != match.profile.key
+                or inverter.profile_confident != match.confident
+            ):
+                _LOGGER.info(
+                    "%s: using profile %s (%s)",
+                    inverter_serial,
+                    match.profile.key,
+                    match.reason,
+                )
+                inverter.profile = match.profile.key
+                inverter.profile_confident = match.confident
+                self._schedule_save()
+            self._sync_profile_issue(inverter)
 
         # Parent first. Publishing the inverter's values creates its entities, and
         # creating those registers the inverter device with a via_device pointing at
@@ -325,6 +339,38 @@ class GrowattHub:
         # yet. The datalogger's own stats entities are what bring it into being.
         self._publish_logger_stats(logger_key)
         self._publish(inverter_key, values)
+
+    @callback
+    def _sync_profile_issue(self, device: GrowattDevice) -> None:
+        """Tell the user when we could not identify an inverter, and stop when we can.
+
+        An unconfident profile still produces entities and still produces numbers, so
+        there is nothing on a dashboard to indicate a problem until one of those numbers
+        is absurd. This surfaces it as a repair instead, pointing at the profile picker.
+        """
+        issue_id = ISSUE_UNCONFIDENT_PROFILE.format(serial=device.serial)
+        wanted = not device.profile_confident
+        if self._issues.get(issue_id) == wanted:
+            return
+        self._issues[issue_id] = wanted
+
+        if not wanted:
+            ir.async_delete_issue(self.hass, DOMAIN, issue_id)
+            return
+
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="unconfident_profile",
+            translation_placeholders={
+                "serial": device.serial,
+                "profile": device.profile or "",
+            },
+            learn_more_url=LEARN_MORE_URL,
+        )
 
     @callback
     def _handle_connection_change(self, session: Session, connected: bool) -> None:

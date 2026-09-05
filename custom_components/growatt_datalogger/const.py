@@ -24,9 +24,12 @@ PLATFORMS: Final = [
 CONF_PROFILE_OVERRIDES: Final = "profile_overrides"
 """Per-inverter-serial profile pins, ``{serial: profile_key}``.
 
-The only way to select the off-grid profile, whose register meanings a record cannot
-distinguish from Protocol II.
+The only way to select the 0-based storage profile, whose register meanings a record
+cannot distinguish from Protocol II. Set from the options flow's profile step.
 """
+
+PROFILE_AUTO: Final = "auto"
+"""Picker sentinel for "no pin". Never stored -- it is removed on save."""
 
 CONF_INCLUDE_UNKNOWN: Final = "include_unknown"
 """Expose registers with no known meaning as disabled diagnostic entities."""
@@ -56,6 +59,18 @@ BUFFERED_EVENT: Final = "event"
 DEFAULT_BUFFERED_POLICY: Final = BUFFERED_EVENT
 
 EVENT_BUFFERED_RECORD: Final = f"{DOMAIN}_buffered_record"
+
+# Repairs ---------------------------------------------------------------------
+
+ISSUE_UNCONFIDENT_PROFILE: Final = "unconfident_profile_{serial}"
+"""Raised when a record's register layout matches no family we know.
+
+The values still decode, so nothing looks broken from the outside -- which is exactly
+why this has to be said out loud. Without it the first sign of trouble is a boost
+temperature of 534 degrees, and the user has to guess that a profile even exists.
+"""
+
+LEARN_MORE_URL: Final = "https://github.com/FezVrasta/growatt-datalogger#troubleshooting"
 
 # Dispatcher signals ----------------------------------------------------------
 # Scoped by entry id. A globally-named signal would cross-talk between two config

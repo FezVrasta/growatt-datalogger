@@ -6,10 +6,17 @@ starting at 3000 is the newer block; one at 1000 is a storage block. That is eno
 pick a profile without any of the plausibility-scoring guesswork that offset-table
 implementations need.
 
-The exception is the off-grid SPF series, which reports a 0-based block whose meanings
-are entirely different -- register 13 is battery charge power there and PV3 power under
-Protocol II. Nothing in the record distinguishes the two, so an off-grid device must be
-identified out of band and pinned by the user.
+The exception is the storage layout on a 0-based block, which the off-grid SPF series
+reports and which at least one SPH with a ShineWiFi-S reports too. Its meanings are
+entirely different -- register 13 is battery charge power there and PV3 power under
+Protocol II. Nothing in the record identifies it positively, so such a device must be
+recognised out of band and pinned by the user.
+
+What the record *can* do is say when it does not look like anything we know. The group
+that starts at register 0 ends at a documented boundary on every family we support: 124
+for Protocol II, 44 or 89 for the legacy map. A first group ending anywhere else is a
+layout we have not been shown, and saying so is the difference between a user seeing a
+prompt to pin a profile and a user seeing a boost temperature of 534 degrees.
 """
 
 from __future__ import annotations
@@ -57,7 +64,7 @@ LEGACY_315 = Profile.compose(
 
 OFFGRID = Profile.compose(
     "offgrid",
-    "Off-grid SPF series",
+    "Storage on a 0-based block (off-grid SPF, and some SPH via ShineWiFi-S)",
     input_tables=[offgrid.INPUT_REGISTERS],
 )
 
@@ -96,9 +103,20 @@ class ProfileMatch:
     """
 
 
-def _highest_end(ranges: Sequence[tuple[int, int]], below: int) -> int | None:
-    ends = [end for start, end in ranges if start < below]
-    return max(ends) if ends else None
+#: Where the group starting at register 0 ends on each 0-based family. Protocol II
+#: devices with extended registers (MIN, MAX3) send *further* groups above 124 -- the
+#: first one still ends there -- so this is read off that group alone rather than from
+#: the highest register in the record.
+PROTOCOL_II_BLOCK_END = 124
+LEGACY_BLOCK_ENDS = frozenset({44, 89})
+
+
+def _zero_block_end(ranges: Sequence[tuple[int, int]]) -> int | None:
+    """Where the group that starts at register 0 ends, if the record has one."""
+    for start, end in ranges:
+        if start == 0:
+            return end
+    return None
 
 
 def resolve_profile(
@@ -136,20 +154,27 @@ def resolve_profile(
     if has_storage_1000:
         return ProfileMatch(STORAGE_1000, "record includes the 1000 storage block", True)
 
-    # A 0-based block. Its highest register distinguishes the legacy map, which stops at
-    # 44 (or 89 across two groups), from Protocol II, which runs to 124.
-    end = _highest_end(ranges, below=1000)
+    # A 0-based block. Where its first group ends distinguishes the legacy map, which
+    # stops at 44 (or 89 across two groups), from Protocol II, which stops at 124.
+    end = _zero_block_end(ranges)
     if end is None:
         return ProfileMatch(
             FALLBACK_PROFILE, "no 0-based group to identify the family", confident=False
         )
-    if end <= 89:
+    if end in LEGACY_BLOCK_ENDS:
         return ProfileMatch(LEGACY_315, f"0-based block ending at {end}", True)
-    if end <= 249:
+    if end == PROTOCOL_II_BLOCK_END:
         return ProfileMatch(PROTOCOL_II, f"0-based block ending at {end}", True)
 
+    # Anything else is a layout we have not been shown. It still decodes as Protocol II,
+    # because a visibly wrong number is more useful than no number at all -- but it is
+    # emphatically a guess, and an SPH reporting the storage layout on a 0-134 block
+    # lands here. Claiming confidence over that is what shipped 65 GWh of daily yield.
     return ProfileMatch(
-        FALLBACK_PROFILE, f"unrecognised 0-based block ending at {end}", confident=False
+        FALLBACK_PROFILE,
+        f"0-based block ends at {end}, which matches no known layout; "
+        f"assuming {FALLBACK_PROFILE.key}",
+        confident=False,
     )
 
 

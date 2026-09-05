@@ -180,8 +180,19 @@ more than one register, so they change together.
 setting, and that nothing else on the machine is using port 5279. The **Connected** binary
 sensor tells you whether the datalogger has reached Home Assistant at all.
 
-**Values look wrong, or your model isn't decoded.** A packet capture is what makes that
-fixable:
+**Values are wildly wrong — a daily yield in the millions, a temperature in the hundreds.**
+Your inverter is being decoded with the wrong register profile. A record normally states
+which Modbus registers it carries, which is enough to work the profile out; a few families
+report a 0-based block whose registers mean something entirely different, and those cannot
+be told apart from the record alone. Off-grid SPF models, and some SPH models behind a
+ShineWiFi-S, are the ones affected — they need the `offgrid` profile.
+
+Home Assistant raises a repair notice when it cannot identify an inverter. To fix it, or to
+override the choice at any time, open the integration's options and choose **Inverter
+profiles**. Each inverter that has reported in gets a dropdown; leave it on *Detect
+automatically* unless the readings say otherwise.
+
+**Your model isn't decoded at all.** A packet capture is what makes that fixable:
 
 ```sh
 python tools/capture.py --out session.jsonl

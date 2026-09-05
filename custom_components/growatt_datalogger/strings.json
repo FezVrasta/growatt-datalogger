@@ -23,6 +23,13 @@
     "step": {
       "init": {
         "title": "Growatt Datalogger options",
+        "menu_options": {
+          "settings": "Settings",
+          "profiles": "Inverter profiles"
+        }
+      },
+      "settings": {
+        "title": "Growatt Datalogger settings",
         "data": {
           "include_unknown": "Expose unrecognised registers",
           "buffered_policy": "Historical records",
@@ -37,6 +44,10 @@
           "relay_host": "Only used when forwarding is enabled.",
           "relay_port": "Only used when forwarding is enabled."
         }
+      },
+      "profiles": {
+        "title": "Inverter profiles",
+        "description": "A record states which Modbus registers it carries, so the right decoding is normally worked out for you. A few families cannot be told apart from the record alone — an off-grid SPF, and some SPH inverters behind a ShineWiFi-S, report a 0-based block whose registers mean something entirely different from Protocol II's. If Home Assistant has told you it could not identify an inverter, or the readings are wildly wrong (a boost temperature in the hundreds, a daily yield in the millions), pick the matching profile here. Leave it on automatic otherwise."
       }
     }
   },
@@ -151,6 +162,12 @@
           "description": "Always required. A multi-register write covers a range rather than one documented setting."
         }
       }
+    }
+  },
+  "issues": {
+    "unconfident_profile": {
+      "title": "Could not identify Growatt inverter {serial}",
+      "description": "The register layout reported by inverter {serial} does not match any family this integration knows, so its readings are being decoded as `{profile}` — a guess. If the values look right, you can ignore this. If they look wrong (a daily yield in the millions, a temperature in the hundreds), open the integration's options, choose **Inverter profiles**, and pin a profile for this inverter. Off-grid SPF models, and some SPH models behind a ShineWiFi-S, need the `offgrid` profile."
     }
   }
 }

@@ -123,6 +123,15 @@ registers. A register no announce reports is asked for directly, but only once a
 proved the device is connected — reading at entity-add time happens during setup, before
 any datalogger has connected, and as a one-shot would never be retried.
 
+One entity is usually one register, with two exceptions. A charge or discharge window is
+three registers — start, stop, enable — that firmware validates as a unit, so all three go
+out as one `0x10` range with the sibling values read back from the inverter first. And a
+rejected write costs one extra read before it is reported, so the message can distinguish
+a register the model does not have from one it has and would not take this value for.
+Which registers belong to which family matters here: the SPH/SPA storage block at
+1000–1118 does not exist on a 3000-block hybrid, and offering it there produced entities
+whose every write came back "no such register".
+
 ## Development
 
 ```sh

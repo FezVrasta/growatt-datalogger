@@ -12,7 +12,13 @@ leaving the entity unknown for good.
 
 A write that the device rejects does not update the state. Optimistic updates would be
 worse than useless here: showing a battery cut-off the inverter never accepted is exactly
-the sort of thing someone builds an automation on.
+the sort of thing someone builds an automation on. A rejection also gets one extra read
+before it is reported, so the message can say whether the inverter has the register at
+all rather than quoting a status byte at someone.
+
+Charge and discharge windows are the exception to "one entity, one register": firmware
+validates a whole slot, so all three of its registers go out together. See
+:data:`~growatt_protocol.registers.writable.TIME_SEGMENTS`.
 """
 
 from __future__ import annotations
@@ -22,7 +28,13 @@ from collections.abc import Callable
 from typing import Any
 
 from growatt_protocol import CommandTimeout, commands
-from growatt_protocol.registers.writable import Encoding, WritableRegister, WriteKind, for_profile
+from growatt_protocol.registers.writable import (
+    Encoding,
+    WritableRegister,
+    WriteKind,
+    for_profile,
+    segment_for,
+)
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
@@ -180,11 +192,7 @@ class GrowattWriteEntity(GrowattEntity):
             raise HomeAssistantError(str(err)) from err
 
         try:
-            response = await session.send_command(
-                commands.write_inverter(
-                    session.datalogger_serial, session.protocol, self.spec.register, word
-                )
-            )
+            response = await self._send_write(session, word)
         except (CommandTimeout, ConnectionError) as err:
             # Deliberately not retried: repeating a write could apply a change twice.
             raise HomeAssistantError(
@@ -193,11 +201,105 @@ class GrowattWriteEntity(GrowattEntity):
             ) from err
 
         if not response.ok:
-            raise HomeAssistantError(
-                f"The inverter rejected {self.spec.key} with result {response.result}"
-            )
+            raise HomeAssistantError(await self._explain_rejection(session, response))
 
         await self._async_refresh()
+
+    async def _send_write(self, session: Any, word: int) -> Any:
+        """Send the write -- as a whole time slot, where the register belongs to one.
+
+        Growatt firmware validates a charge or discharge window as a unit. Enabling one
+        whose boundaries are still 00:00-00:00 is refused, and setting the boundaries one
+        register at a time passes through a moment where the start has moved and the stop
+        has not, which is an inverted window some firmware refuses and some acts on.
+        Sending the three registers as one 0x10 range never presents a half-changed slot.
+        """
+        single = commands.write_inverter(
+            session.datalogger_serial, session.protocol, self.spec.register, word
+        )
+        segment = segment_for(self.spec.register)
+        if segment is None:
+            return await session.send_command(single)
+
+        values = await self._read_segment(session, segment)
+        if values is None:
+            # Without the slot's current contents there is nothing to send alongside this
+            # value, and inventing the other two would overwrite a window someone set in
+            # the Growatt app. Changing one register is the smaller risk.
+            return await session.send_command(single)
+
+        values[segment.index(self.spec.register)] = word
+        response = await session.send_command(
+            commands.write_inverter_range(
+                session.datalogger_serial, session.protocol, segment[0], values
+            )
+        )
+        if response.result == 1:
+            # "Unsupported operation" -- this firmware has no 0x10. Nothing was written,
+            # so falling back to the single-register write cannot apply anything twice.
+            _LOGGER.debug(
+                "%s does not implement range writes; writing %s on its own",
+                self.device.serial,
+                self.spec.key,
+            )
+            return await session.send_command(single)
+        return response
+
+    async def _read_segment(self, session: Any, segment: tuple[int, ...]) -> list[int] | None:
+        """The slot's current words, or None if the inverter did not return all of them."""
+        try:
+            response = await session.send_command(
+                commands.read_inverter(
+                    session.datalogger_serial, session.protocol, segment[0], segment[-1]
+                )
+            )
+        except (CommandTimeout, ConnectionError) as err:
+            _LOGGER.debug("could not read the time slot at %s: %s", segment[0], err)
+            return None
+
+        if len(response.values) != len(segment):
+            _LOGGER.debug(
+                "%s answered a read of %s..%s with %s words, not %s",
+                self.device.serial,
+                segment[0],
+                segment[-1],
+                len(response.values),
+                len(segment),
+            )
+            return None
+        return list(response.values)
+
+    async def _explain_rejection(self, session: Any, response: Any) -> str:
+        """Say what a rejection means, having asked the inverter about the register.
+
+        A bare status byte leaves someone with nowhere to go -- issue #2 was filed
+        against "result 2" for exactly that reason. One extra read separates the two
+        cases a user would act on differently: a register this model does not have, and
+        one it has but would not accept this change to. It delays an error that has
+        already happened, which is the cheapest thing there is to delay.
+        """
+        message = (
+            f"The inverter rejected {self.spec.key} (holding register "
+            f"{self.spec.register}): {commands.describe_result(response.result)}"
+        )
+        try:
+            probe = await session.send_command(
+                commands.read_inverter(
+                    session.datalogger_serial, session.protocol, self.spec.register
+                )
+            )
+        except (CommandTimeout, ConnectionError):
+            return f"{message}."
+
+        if probe.empty or probe.value is None:
+            return (
+                f"{message}. It does not answer a read of that register either, so this "
+                "model does not have it and retrying will not help."
+            )
+        return (
+            f"{message}. The register itself reads back as {probe.value}, so the "
+            "inverter does have it and refused this particular change."
+        )
 
     def _session(self) -> Any:
         parent = self.device.parent

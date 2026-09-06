@@ -69,5 +69,6 @@ class GrowattSyncTime(GrowattEntity, ButtonEntity):
 
         if not response.ok:
             raise HomeAssistantError(
-                f"The datalogger rejected the clock update (result {response.result})"
+                f"The datalogger rejected the clock update: "
+                f"{commands.describe_result(response.result)}"
             )

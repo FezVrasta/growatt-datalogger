@@ -294,9 +294,9 @@ class Session:
             _LOGGER.debug("connection %s: clock set", self.connection_id)
         else:
             _LOGGER.warning(
-                "connection %s: device rejected the clock update (result %s)",
+                "connection %s: device rejected the clock update (%s)",
                 self.connection_id,
-                response.result,
+                commands.describe_result(response.result),
             )
 
     # ------------------------------------------------------------------

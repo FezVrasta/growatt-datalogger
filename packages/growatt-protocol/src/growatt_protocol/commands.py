@@ -192,6 +192,42 @@ class CommandResponse:
         return self.result in (None, 0)
 
 
+#: What a non-zero result byte means.
+#:
+#: The datalogger does not invent these: it relays the inverter's Modbus exception code
+#: unchanged, so the standard exception table applies. Worth translating, because the
+#: number on its own is a dead end -- "result 2" tells a user nothing, while "no such
+#: register" tells them their model keeps that setting somewhere else and no amount of
+#: retrying will help.
+#:
+#: Phrased as fragments without a subject, because the same byte can come from the
+#: datalogger answering for itself or from the inverter behind it, and the caller is the
+#: one that knows which.
+RESULT_MEANINGS: dict[int, str] = {
+    1: "unsupported operation",
+    2: "no such register",
+    3: "the value is outside the range this register accepts",
+    4: "the device failed while applying the change",
+    5: "accepted, but not applied yet",
+    6: "the device is busy",
+    8: "a memory error in the device",
+    10: "the datalogger has no path to the inverter",
+    11: "the inverter did not answer the datalogger",
+}
+
+
+def describe_result(result: int | None) -> str:
+    """``result 2 (no such register)``, for a message someone has to act on.
+
+    A byte with no known meaning is still reported as a number: more use in a bug report
+    than a shrug, and the table above grew out of exactly that.
+    """
+    if result is None:
+        return "no result byte"
+    meaning = RESULT_MEANINGS.get(result)
+    return f"result {result}" if meaning is None else f"result {result} ({meaning})"
+
+
 def parse_command_response(frame: Frame) -> CommandResponse:
     """Interpret a 0x05, 0x06, 0x10, 0x18 or 0x19 reply.
 

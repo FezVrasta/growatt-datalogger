@@ -196,7 +196,10 @@ def async_register_services(hass: HomeAssistant) -> None:
             raise HomeAssistantError(str(err)) from err
 
         if not response.ok:
-            raise HomeAssistantError(f"The device rejected the write with result {response.result}")
+            raise HomeAssistantError(
+                f"The device rejected the write to register {register}: "
+                f"{commands.describe_result(response.result)}"
+            )
         return {"register": response.register, "result": response.result}
 
     async def _write_many(call: ServiceCall) -> ServiceResponse:
@@ -229,7 +232,8 @@ def async_register_services(hass: HomeAssistant) -> None:
 
         if not response.ok:
             raise HomeAssistantError(
-                f"The inverter rejected the write with result {response.result}"
+                f"The inverter rejected the write to {len(values)} registers from "
+                f"{start}: {commands.describe_result(response.result)}"
             )
         return {
             "start_register": response.register,
@@ -247,7 +251,8 @@ def async_register_services(hass: HomeAssistant) -> None:
             raise HomeAssistantError(str(err)) from err
         if not response.ok:
             raise HomeAssistantError(
-                f"The datalogger rejected the clock update (result {response.result})"
+                f"The datalogger rejected the clock update: "
+                f"{commands.describe_result(response.result)}"
             )
 
     async def _adopt_history(call: ServiceCall) -> ServiceResponse:

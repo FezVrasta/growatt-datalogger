@@ -152,6 +152,10 @@ A lot of what circulates about *other* registers is community folklore: right on
 person's firmware, wrong on another's. Those entities exist but are created disabled, and
 each one shows where its meaning came from in its attributes.
 
+A charge or discharge window's start, its stop and its enable switch go to the inverter
+**together**, as one operation. Firmware validates a window as a whole, so writing it a
+register at a time can present a start that has moved past a stop that has not.
+
 For anything else, there are services:
 
 ```yaml
@@ -179,6 +183,15 @@ more than one register, so they change together.
 **No data at all.** Check the datalogger really was rebooted after you changed its server
 setting, and that nothing else on the machine is using port 5279. The **Connected** binary
 sensor tells you whether the datalogger has reached Home Assistant at all.
+
+**A setting won't change — "the inverter rejected …".** The message names the holding
+register and translates the inverter's answer, then reads that register back to say
+whether the inverter has it at all. *No such register* is the one worth reading closely:
+your model keeps that setting somewhere else and retrying will not help. The SPH/SPA
+charge schedule lives at registers 1080–1108, and a MOD or MIN TL-XH hybrid does not have
+those. Any other answer means the register is there and the inverter refused this
+particular change — most often an attempt to enable a window whose start and stop are both
+still 00:00.
 
 **Values are wildly wrong — a daily yield in the millions, a temperature in the hundreds.**
 Your inverter is being decoded with the wrong register profile. A record normally states

@@ -173,6 +173,18 @@ def test_a_rejected_write_is_not_ok() -> None:
     assert not response.ok
 
 
+def test_a_result_byte_is_explained_rather_than_quoted() -> None:
+    """A bare status byte tells nobody anything; "no such register" ends the search."""
+    assert commands.describe_result(2) == "result 2 (no such register)"
+    assert commands.describe_result(3).startswith("result 3 (the value is outside")
+
+
+def test_an_unrecognised_result_byte_is_still_reported() -> None:
+    """A number we cannot name is more use to a bug report than a shrug."""
+    assert commands.describe_result(200) == "result 200"
+    assert commands.describe_result(None) == "no result byte"
+
+
 def test_datalogger_write_response() -> None:
     response = parse_command_response(_response(0x18, b"\x00", register=0x1F))
     assert response.register == 0x1F

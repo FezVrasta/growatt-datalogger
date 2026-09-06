@@ -51,6 +51,23 @@ DEFAULT_COMMAND_INTERVAL = 0.15
 #: gap a datalogger sees when talking to the vendor's own server.
 DEFAULT_TIME_SYNC_DELAY = 1.0
 
+#: Sequence numbers are allocated from the top half of the range.
+#:
+#: With the cloud relay on, this connection carries two servers' commands: ours and
+#: Growatt's. The device answers both, and both answers arrive here. A reply is matched
+#: to its request by sequence number, so a counter starting at 1 -- as the vendor's own
+#: appears to -- makes a collision likely, and a collision hands one server's answer to
+#: the other's request. That is not merely a wrong reading: :func:`~.settings.write_register`
+#: reads a charge window before rewriting it, so another request's words could be written
+#: into someone's schedule.
+#:
+#: Counting from somewhere nothing else counts from costs nothing and removes the
+#: overlap. 0 and 0xFFFF are still avoided, because devices have been seen using them as
+#: sentinels.
+SEQUENCE_FLOOR = 0x8000
+SEQUENCE_CEILING = 0xFFFE
+"""Exclusive upper bound."""
+
 
 @dataclass(slots=True)
 class _Outstanding:
@@ -161,7 +178,8 @@ class Session:
         self.time_synced = False
         self._time_task: asyncio.Task[None] | None = None
 
-        self._sequence = 0
+        # One below the floor, so the first allocation is the floor itself.
+        self._sequence = SEQUENCE_FLOOR - 1
         self._outstanding: _Outstanding | None = None
         self._command_lock = asyncio.Lock()
         self._unsolicited: deque[CommandResponse] = deque(maxlen=32)
@@ -365,11 +383,13 @@ class Session:
         """Allocate a sequence number not currently outstanding.
 
         A real counter, unlike implementations that leave it pinned at 1 and then have
-        nothing to correlate replies against. Zero and 0xFFFF are avoided because
-        devices have been seen using them as sentinels.
+        nothing to correlate replies against. It counts within
+        :data:`SEQUENCE_FLOOR`..:data:`SEQUENCE_CEILING` so that it cannot collide with
+        the cloud's when the relay is on.
         """
-        for _ in range(0xFFFE):
-            self._sequence = (self._sequence % 0xFFFD) + 1
+        span = SEQUENCE_CEILING - SEQUENCE_FLOOR
+        for _ in range(span):
+            self._sequence = SEQUENCE_FLOOR + (self._sequence + 1 - SEQUENCE_FLOOR) % span
             if self._outstanding is None or self._outstanding.sequence != self._sequence:
                 return self._sequence
         raise RuntimeError("no free sequence numbers")
@@ -447,8 +467,24 @@ class Session:
         future = None
         outstanding = self._outstanding
         if outstanding is not None and outstanding.function == frame.function:
-            if outstanding.sequence == frame.sequence:
+            same_register = response.register in (None, outstanding.register)
+            if outstanding.sequence == frame.sequence and same_register:
                 future = outstanding.future
+            elif outstanding.sequence == frame.sequence:
+                # Our sequence number, another register's answer. Only the relay can
+                # produce this -- a second server issuing commands on this connection --
+                # and taking it would return one request's data for another. Refusing it
+                # turns a wrong answer into a timeout, which is the better of the two
+                # when the caller might be about to write what it reads back.
+                _LOGGER.warning(
+                    "connection %s: %#04x reply on sequence %s answers register %s, not "
+                    "the register %s that was asked for; ignoring it",
+                    self.connection_id,
+                    frame.function,
+                    frame.sequence,
+                    response.register,
+                    outstanding.register,
+                )
             elif response.register is not None and outstanding.register == response.register:
                 # It is not established that every firmware echoes the request's
                 # sequence, so the register acts as a fallback. Because commands are

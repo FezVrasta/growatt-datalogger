@@ -2,19 +2,27 @@
 
 Write entities differ from sensors in where their value comes from. A telemetry record
 carries input registers; these settings live in the holding space. Fortunately an
-announce carries holding registers, so for most of them the device volunteers the current
-value every time it connects, and the entity simply reads it from the coordinator.
+announce carries the holding space, so the device volunteers the current value of every
+one of these registers each time it connects, and the entity simply reads it from the
+coordinator.
 
 For a register no announce reports, the entity asks for it directly -- but only once a
 record has arrived, because entities are added during setup, before any datalogger has
 connected. Reading at add time talks to nothing, and as a one-shot it would never retry,
-leaving the entity unknown for good.
+leaving the entity unknown for good. A one-shot is also why the announce matters so much:
+it is the only thing here that refreshes. Without it an entity shows what the register
+held at startup for as long as the integration stays loaded, and "reload the integration
+and the values are right" is what that looks like from outside.
 
 A write that the device rejects does not update the state. Optimistic updates would be
 worse than useless here: showing a battery cut-off the inverter never accepted is exactly
 the sort of thing someone builds an automation on. A rejection also gets one extra read
 before it is reported, so the message can say whether the inverter has the register at
-all rather than quoting a status byte at someone.
+all rather than quoting a status byte at someone. And an *accepted* write is read back
+too, because acceptance is not application: firmware will take a value and then discard
+it -- arming a window that is still 00:00-00:00 is the case that turns up in practice --
+and a switch that reports success for a change the inverter dropped is the worst of the
+three outcomes.
 
 Charge and discharge windows are the exception to "one entity, one register": firmware
 validates a whole slot, so all three of its registers go out together. How that is done
@@ -28,11 +36,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
 from growatt_protocol import CommandTimeout, commands, settings
 from growatt_protocol.registers.writable import (
-    Encoding,
     WritableRegister,
     WriteKind,
     for_profile,
@@ -41,8 +49,9 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.util import dt as dt_util
 
-from .const import KIND_INVERTER
+from .const import KIND_INVERTER, VALUE_HOLDING, VALUE_HOLDING_AT
 from .entity import GrowattEntity, async_on_new_device
 from .hub import GrowattDevice, GrowattHub
 from .metadata import pretty
@@ -141,6 +150,7 @@ class GrowattWriteEntity(GrowattEntity):
         self._attr_icon = spec.icon
         self._attr_entity_registry_enabled_default = spec.enabled_default
         self._current: Any = None
+        self._current_at: datetime | None = None
         self._refresh_requested = False
 
     @property
@@ -157,26 +167,51 @@ class GrowattWriteEntity(GrowattEntity):
     def _reported(self) -> Any | None:
         """This register's value as the device itself last reported it.
 
-        An announce carries holding registers, which is where these settings live, so
-        for most of them the device volunteers the current value every time it connects
-        -- no command round-trip needed, and it refreshes itself.
+        An announce carries the holding space, which is where these settings live, so
+        the device volunteers the current value every time it connects -- no command
+        round-trip needed, and it refreshes itself.
 
-        Only unscaled encodings are taken this way. A scaled one would already have been
-        divided by the register table, and running it through :meth:`decode` again would
-        scale it twice.
+        Taken from the announce's raw words rather than from the profile's named values,
+        because a profile names only a handful of holding registers and none of the
+        SPH/SPA storage block: charge priority, the SOC limits and all six Grid First /
+        Battery First windows have no name to look up. Reading the word is what makes
+        the free refresh apply to every write entity rather than to two of them. It also
+        removes the double-scaling hazard that the name lookup had to guard against -- a
+        named value has already been through the register table's scale, a raw word has
+        not -- so every encoding can come this way.
         """
-        if self.spec.encoding not in (Encoding.RAW, Encoding.BOOL):
+        word = ((self.coordinator.data or {}).get(VALUE_HOLDING) or {}).get(self.spec.register)
+        if not isinstance(word, int):
             return None
-        value = (self.coordinator.data or {}).get(self.spec.key)
-        if not isinstance(value, int):
-            return None
-        return self.spec.decode(value)
+        return self.spec.decode(word)
 
     @property
     def _state(self) -> Any | None:
-        """What to display: the device's own report, else our last read or write."""
+        """What to display: whichever of the device's report and our own read is newer.
+
+        Not simply "prefer the device". Both are the device -- one is what it announced
+        when it last connected, the other is what it answered when we last read the
+        register -- and an announce can be hours old while a read-back is seconds old.
+        Preferring the announce unconditionally would snap a switch back to its
+        pre-write value for the rest of the connection, which is exactly the confusion
+        this is meant to end.
+        """
         reported = self._reported
-        return self._current if reported is None else reported
+        if reported is None:
+            return self._current
+        if self._current is None or self._current_at is None:
+            return reported
+        announced = (self.coordinator.data or {}).get(VALUE_HOLDING_AT)
+        if announced is not None and announced > self._current_at:
+            return reported
+        return self._current
+
+    @callback
+    def _remember(self, value: Any) -> None:
+        """Record a value we read from the register, and when we read it."""
+        self._current = value
+        self._current_at = dt_util.utcnow()
+        self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -214,18 +249,19 @@ class GrowattWriteEntity(GrowattEntity):
             )
             return
 
-        self._current = self.spec.decode(word)
-        self.async_write_ha_state()
+        self._remember(self.spec.decode(word))
 
-    async def _async_refresh(self) -> None:
+    async def _async_refresh(self) -> int | None:
         """Read this one register back, to confirm what a write actually did.
 
         Deliberately not the batch: after a write the caller is waiting, and one
         register is what changed.
+
+        Returns the word the inverter answered with, or None if it did not answer.
         """
         session = self._session()
         if session is None:
-            return
+            return None
         try:
             response = await session.send_command(
                 commands.read_inverter(
@@ -234,7 +270,7 @@ class GrowattWriteEntity(GrowattEntity):
             )
         except (CommandTimeout, ConnectionError) as err:
             _LOGGER.debug("could not read %s: %s", self.spec.key, err)
-            return
+            return None
 
         if response.empty or response.value is None:
             # The device does not implement this register. Better an unknown value than
@@ -242,10 +278,11 @@ class GrowattWriteEntity(GrowattEntity):
             _LOGGER.debug(
                 "%s does not implement register %s", self.device.serial, self.spec.register
             )
-            return
+            return None
 
-        self._current = self.spec.decode(int(response.value))
-        self.async_write_ha_state()
+        word = int(response.value)
+        self._remember(self.spec.decode(word))
+        return word
 
     async def _async_write(self, value: Any) -> None:
         """Write ``value``, then read the register back to confirm."""
@@ -278,7 +315,21 @@ class GrowattWriteEntity(GrowattEntity):
                 )
             )
 
-        await self._async_refresh()
+        # Accepted is not applied. Firmware will take a write and then quietly discard
+        # it -- arming a window whose start and stop are both still 00:00 is the case
+        # that turns up in practice -- and the read-back is the only way to tell that
+        # apart from a change that stuck. Reporting success for a change the inverter
+        # dropped leaves someone with a switch that says on and an inverter that is off,
+        # which is worse than either an error or a refusal.
+        readback = await self._async_refresh()
+        if readback is not None and readback != word:
+            raise HomeAssistantError(
+                f"The inverter accepted {self.spec.key} but holding register "
+                f"{self.spec.register} still reads back as {readback}, not {word}. The "
+                "change was not applied. Some firmware discards a value it cannot act on "
+                "-- enabling a window that is still 00:00-00:00, for instance -- so check "
+                "whether this setting depends on another one."
+            )
 
     def _session(self) -> Any:
         parent = self.device.parent

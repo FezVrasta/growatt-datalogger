@@ -59,6 +59,7 @@ class FakeInverter:
         values: dict[int, int] | None = None,
         *,
         missing: set[int] | None = None,
+        discard: set[int] | None = None,
         result: int = 0,
     ) -> None:
         self.device = device
@@ -70,6 +71,15 @@ class FakeInverter:
 
         A read of any range covering one of these comes back as the echo alone, which is
         how a real device says "not here" -- it does not answer with an error.
+        """
+
+        self.discard = set(discard or ())
+        """Registers that answer "accepted" and then keep their old value.
+
+        The third outcome of a write, and the one a fake that always stores what it is
+        told cannot express. Real firmware does this: it will take a value it has no way
+        to act on -- arming a charge window whose start and stop are both still 00:00 is
+        the case that turns up -- report success, and go on reading back as it was.
         """
 
         self.result = result
@@ -153,7 +163,7 @@ class FakeInverter:
         if request.function == 0x06:
             width = request.serial_width
             value = int.from_bytes(request.body[width + 2 : width + 4], "big")
-            if self.result == 0:
+            if self.result == 0 and register not in self.discard:
                 self.values[register] = value
             return build_write_response(
                 serial, register=register, value=value, result=self.result, **common
@@ -164,7 +174,8 @@ class FakeInverter:
             end = int.from_bytes(request.body[width + 2 : width + 4], "big")
             if self.result == 0:
                 for offset, value in enumerate(request_values(request)):
-                    self.values[register + offset] = value
+                    if register + offset not in self.discard:
+                        self.values[register + offset] = value
             return build_range_write_response(
                 serial, start=register, end=end, result=self.result, **common
             )

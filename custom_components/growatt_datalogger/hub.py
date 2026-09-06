@@ -48,6 +48,8 @@ from .const import (
     VALUE_BUFFERED_RECORDS,
     VALUE_CRC_MISMATCHES,
     VALUE_DECODE_ERRORS,
+    VALUE_HOLDING,
+    VALUE_HOLDING_AT,
     VALUE_LAST_RECORD,
     VALUE_PROFILE,
     VALUE_RECORDS,
@@ -298,7 +300,16 @@ class GrowattHub:
 
         values: dict[str, Any] = dict(decoded.values)
         if self.include_unknown:
-            values.update({f"register_{number}": word for number, word in decoded.unknown.items()})
+            # Prefixed by space, not just by number. These are two separate address
+            # files -- holding 1080 is a discharge window's start time on an SPH while
+            # input 1080 is telemetry -- so a single ``register_1080`` name is fed by
+            # both and shows whichever record arrived last. Silent, and it makes a
+            # diagnostics dump actively misleading: the same register in two dumps from
+            # the same device disagreeing is what sent
+            # https://github.com/FezVrasta/growatt-datalogger/issues/2 down a blind
+            # alley.
+            prefix = "holding" if space is RegisterSpace.HOLDING else "register"
+            values.update({f"{prefix}_{number}": word for number, word in decoded.unknown.items()})
         values[VALUE_LAST_RECORD] = dt_util.utcnow()
         values[VALUE_PROFILE] = match.profile.key
 
@@ -307,6 +318,18 @@ class GrowattHub:
         inverter = self._ensure_device(
             inverter_key, KIND_INVERTER, inverter_serial, parent=logger_key
         )
+
+        if space is RegisterSpace.HOLDING:
+            # Every settings register, raw, for the write entities to read themselves
+            # out of. This is the only unsolicited report of the holding space there
+            # is, and it costs nothing: the device sends it on every connection.
+            #
+            # Merged with what a previous announce carried rather than replacing it, so
+            # a device that splits its holding space across several records does not
+            # lose the groups it is not sending this time.
+            previous = (self.coordinators[inverter_key].data or {}).get(VALUE_HOLDING) or {}
+            values[VALUE_HOLDING] = {**previous, **payload.registers}
+            values[VALUE_HOLDING_AT] = values[VALUE_LAST_RECORD]
 
         _LOGGER.debug(
             "record fn=%#04x space=%s profile=%s: %d named values, %d unnamed registers",

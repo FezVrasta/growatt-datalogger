@@ -16,6 +16,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import GrowattConfigEntry
 from .const import (
+    NOT_SENSORS,
     SIGNAL_NEW_DEVICE,
     VALUE_CRC_MISMATCHES,
     VALUE_DECODE_ERRORS,
@@ -42,7 +43,12 @@ async def async_setup_entry(
         device = hub.devices.get(device_key)
         if device is None:
             return
-        async_add_entities(GrowattSensor(hub, device, name) for name in names)
+        # Not every published value is a reading. A couple of them are state one entity
+        # keeps for another to read -- a raw register map and its timestamp -- and a
+        # sensor whose native value is a dict is not a sensor.
+        async_add_entities(
+            GrowattSensor(hub, device, name) for name in names if name not in NOT_SENSORS
+        )
 
     entry.async_on_unload(
         async_dispatcher_connect(hass, SIGNAL_NEW_DEVICE.format(entry_id=entry.entry_id), _add)

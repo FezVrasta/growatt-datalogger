@@ -115,3 +115,30 @@ VALUE_DECODE_ERRORS: Final = "decode_errors"
 VALUE_CRC_MISMATCHES: Final = "crc_mismatches"
 VALUE_BUFFERED_RECORDS: Final = "buffered_records"
 VALUE_PROFILE: Final = "profile"
+
+VALUE_HOLDING: Final = "holding_registers"
+"""Every holding register the last announce carried, raw, as ``{number: word}``.
+
+The settings a write entity owns live in the holding space, and an announce carries that
+whole space -- so the device volunteers the current value of every one of them on each
+connection. A profile names only a handful of holding registers, though, and none of the
+SPH/SPA storage block, so the named values alone leave those entities with nothing to
+refresh from. Keeping the raw words is what lets them.
+
+Not gated on :data:`CONF_INCLUDE_UNKNOWN`: that option decides whether unnamed registers
+become diagnostic *entities*, and a switch showing the wrong state must not depend on it.
+"""
+
+VALUE_HOLDING_AT: Final = "holding_registers_at"
+"""When :data:`VALUE_HOLDING` was last reported.
+
+A write is read back immediately, and the last announce may be hours old. Without knowing
+which is newer, a freshly written switch snaps back to its pre-write value.
+"""
+
+NOT_SENSORS: Final = frozenset({VALUE_HOLDING, VALUE_HOLDING_AT})
+"""Coordinator values that exist for other entities to read, not to be shown.
+
+Everything else the hub publishes becomes a sensor by name. These two are a raw register
+map and its timestamp -- state for the write entities.
+"""

@@ -60,6 +60,12 @@ This also means neither kind of record can be published as a wholesale replaceme
 device's data: each would wipe the other, and since a datalogger announces on every
 reconnect, telemetry would survive only seconds at a time.
 
+The separation has to survive into the value names as well. A register with no spec is
+published raw, and naming those by number alone puts holding 1100 and input 1100 under one
+name where each record overwrites the other — a value that silently means two different
+things depending on which record landed last. So unnamed input registers are `register_N`
+and unnamed holding registers are `holding_N`.
+
 ## What a datalogger expects back
 
 Getting this wrong produces silence rather than errors, which is why it is worth writing
@@ -119,9 +125,18 @@ instead. `unique_id` excludes the profile name, so correcting a device's profile
 orphan every entity and recreate it with a `_2` suffix.
 
 Write entities take their value from the announce, which already carries those holding
-registers. A register no announce reports is asked for directly, but only once a record has
-proved the device is connected — reading at entity-add time happens during setup, before
-any datalogger has connected, and as a one-shot would never be retried.
+registers — from its raw words, not from the profile's named values, because a profile
+names four holding registers and none of the SPH/SPA storage block. Reading the word is
+what makes that free refresh reach every window and SOC limit rather than two entities.
+A register no announce reports is asked for directly, but only once a record has proved
+the device is connected — reading at entity-add time happens during setup, before any
+datalogger has connected, and as a one-shot would never be retried.
+
+That direct read is a one-shot, so the announce is the only thing here that refreshes: a
+write entity with no announce behind it shows what its register held at startup until the
+integration is reloaded. Where both exist, the newer wins — a read-back taken seconds ago
+beats an announce from the last reconnect, or a freshly written switch would snap back to
+its old value until the datalogger next connects.
 
 Those reads are batched. Which registers a device wants is known from its profile before
 any of them is asked for, so they go out as a handful of range reads rather than one

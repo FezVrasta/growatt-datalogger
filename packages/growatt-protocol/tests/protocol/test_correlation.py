@@ -98,6 +98,44 @@ async def test_a_reply_with_the_wrong_sequence_still_matches_on_the_register(
     assert (await task).value == 777
 
 
+async def test_sequence_numbers_stay_clear_of_the_cloud_relay(make_session: MakeSession) -> None:
+    """Counting from 1, as the vendor's server appears to, invites a collision.
+
+    With the relay on, two servers issue commands down one connection and both answers
+    arrive here. A shared sequence number would hand one server's answer to the other's
+    request -- and a window write reads before it rewrites, so that answer could end up
+    written into someone's schedule.
+    """
+    session, sent, _ = make_session(identified=True)
+
+    for _ in range(5):
+        task = asyncio.create_task(session.send_command(commands.read_inverter(SERIAL, 6, 3)))
+        await asyncio.sleep(0)
+        sequence = Frame(sent[-1]).sequence
+        assert sequence >= 0x8000
+        await session.handle_frame(reply(0x05, 3, b"\x00\x01", sequence))
+        await task
+
+
+async def test_a_reply_for_another_register_is_refused_even_on_our_sequence(
+    make_session: MakeSession,
+) -> None:
+    """A wrong answer is worse than no answer when the caller may write what it reads."""
+    session, sent, _ = make_session(identified=True)
+    task = asyncio.create_task(
+        session.send_command(commands.read_inverter(SERIAL, 6, 1080), timeout=0.1)
+    )
+    await asyncio.sleep(0)
+    sequence = Frame(sent[-1]).sequence
+
+    await session.handle_frame(reply(0x05, 1044, (777).to_bytes(2, "big"), sequence))
+
+    with pytest.raises(CommandTimeout):
+        await task
+    # And it is kept, so a diagnostics dump can show that something else is talking.
+    assert [r.register for r in session.unsolicited] == [1044]
+
+
 async def test_a_reply_nobody_awaits_is_recorded_not_dropped(make_session: MakeSession) -> None:
     session, _, _ = make_session(identified=True)
     await session.handle_frame(reply(0x05, 99, b"\x00\x05", sequence=1))

@@ -58,6 +58,21 @@ async def async_get_config_entry_diagnostics(
             "unknown_functions": {
                 f"{code:#04x}": count for code, count in session.stats.unknown_functions.items()
             },
+            # Replies nothing here was waiting for. On a connection of our own that
+            # means a command timed out and its answer turned up late. With the cloud
+            # relay on it means something else entirely: Growatt is issuing its own
+            # commands down the same socket, and ours are interleaved with them. Which
+            # of those is happening changes the diagnosis completely, and nothing else
+            # in this dump distinguishes them.
+            "unsolicited": [
+                {
+                    "function": f"{reply.function:#04x}",
+                    "register": reply.register,
+                    "result": reply.result,
+                    "empty": reply.empty,
+                }
+                for reply in session.unsolicited
+            ],
         }
         for session in hub.sessions
     ]

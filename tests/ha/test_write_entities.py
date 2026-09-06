@@ -240,3 +240,112 @@ async def test_a_switch_is_known_once_the_device_reports_it(
     await settle(hass)
 
     assert hass.states.get(entity(hass, "switch", "inverter_enabled")).state == "on"
+
+
+#: The 1000 storage block as an SPA reports it in its announce: Battery First slot 1
+#: runs 23:30 to 05:30 and is armed, slot 2 runs 11:00 to 12:00 and is not.
+BATTERY_FIRST = {1100: 0x171E, 1101: 0x051E, 1102: 1, 1103: 0x0B00, 1104: 0x0C00, 1105: 0}
+
+#: Those six registers as a holding group, which is what an announce carries.
+BATTERY_FIRST_GROUP = [build_group(1100, [BATTERY_FIRST[r] for r in sorted(BATTERY_FIRST)])]
+
+
+async def test_the_storage_block_takes_its_values_from_the_announce(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    device: FakeDatalogger,
+    inverter: FakeInverter,
+) -> None:
+    """The whole settings block refreshes itself, not just the two registers with names.
+
+    A profile names four holding registers; the SPH/SPA storage block is not among them,
+    so reading the announce by *name* left every window and SOC limit showing whatever a
+    one-shot read found at startup, for as long as the integration stayed loaded. That is
+    what "reload the integration and the values are right" looks like from outside --
+    https://github.com/FezVrasta/growatt-datalogger/issues/2.
+    """
+    await device.send_data(groups=STORAGE_1000)
+    await settle(hass)
+    await device.send_announce(groups=BATTERY_FIRST_GROUP)
+    await settle(hass)
+
+    assert hass.states.get(entity(hass, "switch", "battery_first_enabled")).state == "on"
+    assert hass.states.get(entity(hass, "switch", "battery_first_enabled_2")).state == "off"
+    assert hass.states.get(entity(hass, "time", "battery_first_start_time")).state == "23:30:00"
+    assert hass.states.get(entity(hass, "time", "battery_first_start_time_2")).state == "11:00:00"
+
+
+async def test_a_holding_register_does_not_overwrite_the_input_register_of_the_same_number(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    config_entry: MockConfigEntry,
+    device: FakeDatalogger,
+    inverter: FakeInverter,
+) -> None:
+    """Two address files, two namespaces.
+
+    Holding 1100 is a discharge window's start time on an SPA; input 1100 is telemetry.
+    Published under one ``register_1100`` name they take turns, and the value depends on
+    which record happened to arrive last -- which is how two diagnostics dumps from one
+    device came to disagree about the same register.
+    """
+    hass.config_entries.async_update_entry(
+        config_entry, options={**config_entry.options, "include_unknown": True}
+    )
+    await hass.async_block_till_done()
+
+    await device.send_data(groups=[build_group(1000, [0] * 60), build_group(1100, [4242] * 6)])
+    await settle(hass)
+    await device.send_announce(groups=BATTERY_FIRST_GROUP)
+    await settle(hass)
+
+    data = setup_integration.runtime_data.coordinators[f"inverter:{INVERTER}"].data
+    assert data["register_1100"] == 4242
+    assert data["holding_1100"] == 0x171E
+
+
+async def test_a_write_the_inverter_drops_is_reported_rather_than_shown_as_success(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, device: FakeDatalogger
+) -> None:
+    """Accepted is not applied.
+
+    Firmware will take a value it cannot act on, answer "accepted", and go on reading
+    back as it was -- arming a window that is still 00:00-00:00 is the case in practice.
+    A switch that reports success for a change the inverter dropped is worse than either
+    an error or an outright refusal.
+    """
+    async with FakeInverter(device, discard={1108}) as inverter:
+        assert inverter is not None
+        await device.send_data(groups=STORAGE_1000)
+        await settle(hass)
+
+        entity_id = entity(hass, "switch", "battery_first_enabled_3")
+        with pytest.raises(HomeAssistantError, match="reads back as 0"):
+            await hass.services.async_call(
+                "switch", "turn_on", {"entity_id": entity_id}, blocking=True
+            )
+
+        assert hass.states.get(entity_id).state == "off"
+
+
+async def test_a_write_is_not_undone_by_an_older_announce(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, device: FakeDatalogger
+) -> None:
+    """The read-back is newer than the last announce, and has to win.
+
+    Otherwise a switch snaps straight back to its pre-write value and stays there until
+    the datalogger next reconnects.
+    """
+    async with FakeInverter(device, dict(BATTERY_FIRST)) as inverter:
+        assert inverter is not None
+        await device.send_data(groups=STORAGE_1000)
+        await settle(hass)
+        await device.send_announce(groups=BATTERY_FIRST_GROUP)
+        await settle(hass)
+
+        entity_id = entity(hass, "switch", "battery_first_enabled_2")
+        assert hass.states.get(entity_id).state == "off"
+
+        await hass.services.async_call("switch", "turn_on", {"entity_id": entity_id}, blocking=True)
+
+        assert hass.states.get(entity_id).state == "on"

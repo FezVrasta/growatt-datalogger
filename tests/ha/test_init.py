@@ -11,7 +11,6 @@ from growatt_protocol.testing.frames import build_group
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_PORT
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import (
@@ -27,7 +26,7 @@ from custom_components.growatt_datalogger.const import (
 )
 from custom_components.growatt_datalogger.hub import device_key
 
-from .conftest import INVERTER, SERIAL, device_id, settle
+from .conftest import INVERTER, SERIAL, device_entry, device_id, settle
 
 
 async def test_setup_and_unload(hass: HomeAssistant, setup_integration: MockConfigEntry) -> None:
@@ -91,13 +90,9 @@ async def test_device_topology_uses_via_device(
     await device.send_data()
     await settle(hass)
 
-    registry = dr.async_get(hass)
-    entry_id = setup_integration.entry_id
-    logger = registry.async_get_device_by_identifier((DOMAIN, f"logger:{SERIAL}"), entry_id)
-    inverter = registry.async_get_device_by_identifier((DOMAIN, f"inverter:{INVERTER}"), entry_id)
+    logger = device_entry(hass, setup_integration, f"logger:{SERIAL}")
+    inverter = device_entry(hass, setup_integration, f"inverter:{INVERTER}")
 
-    assert logger is not None
-    assert inverter is not None
     assert inverter.via_device_id == logger.id
 
 

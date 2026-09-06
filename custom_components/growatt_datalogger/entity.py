@@ -88,18 +88,30 @@ class GrowattEntity(CoordinatorEntity[GrowattCoordinator]):
             if self.device.parent:
                 # Gives the correct topology: the inverter hangs off the datalogger, so
                 # losing the logger greys out the whole branch.
-                #
-                # By id rather than by identifier: `via_device` is deprecated and removed
-                # in Home Assistant 2027.8. The lookup is tolerated failing -- the hub
-                # publishes the datalogger's entities before the inverter's precisely so
-                # the parent exists by now, but a flat topology is a better outcome than
-                # an entity that refuses to be created.
-                parent = dr.async_get(self.hub.hass).async_get_device_by_identifier(
-                    (DOMAIN, self.device.parent), self.hub.entry.entry_id
-                )
-                if parent is not None:
-                    info["via_device_id"] = parent.id
+                info.update(self._via_parent())
         return info
+
+    def _via_parent(self) -> dict[str, Any]:
+        """Point this device at its datalogger, however the running version wants it.
+
+        ``via_device`` is deprecated and removed in Home Assistant 2027.8; the
+        ``via_device_id`` that replaces it, and the registry lookup that resolves one,
+        did not exist before 2026.8. This integration is installed through HACS onto
+        whatever version someone happens to be running, so it speaks both for as long as
+        both exist -- and detects which by asking the registry rather than by comparing
+        version numbers, since the capability is the thing that matters.
+        """
+        identifier = (DOMAIN, self.device.parent)
+        registry = dr.async_get(self.hub.hass)
+        by_identifier = getattr(registry, "async_get_device_by_identifier", None)
+        if by_identifier is None:
+            return {"via_device": identifier}
+
+        # A parent that is somehow not registered yet degrades to a flat topology. The
+        # hub publishes the datalogger's entities before the inverter's precisely so it
+        # is there by now, but that is a better outcome than an entity refusing to exist.
+        parent = by_identifier(identifier, self.hub.entry.entry_id)
+        return {"via_device_id": parent.id} if parent is not None else {}
 
     @property
     def available(self) -> bool:

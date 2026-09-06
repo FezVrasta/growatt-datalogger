@@ -31,16 +31,27 @@ async def settle(hass: HomeAssistant, times: int = 3) -> None:
         await hass.async_block_till_done()
 
 
-def device_id(hass: HomeAssistant, entry: MockConfigEntry, key: str) -> str:
-    """The Home Assistant device id for one of ours, by our own device key.
+def device_entry(hass: HomeAssistant, entry: MockConfigEntry, key: str) -> dr.DeviceEntry:
+    """The registered device for one of our device keys.
 
-    ``async_get_device_by_identifier`` rather than ``async_get_device``: the latter is
-    deprecated because identifiers are only unique *within* a config entry, and calling
-    it from test code raises rather than warns.
+    Filtering the config entry's own devices, deliberately. The obvious call,
+    ``async_get_device``, is deprecated -- identifiers are only unique *within* a config
+    entry -- and raises rather than warns from test code. Its replacement,
+    ``async_get_device_by_identifier``, does not exist before Home Assistant 2026.8, and
+    ``registry.devices`` is a mapping on one version and an iterable of entries on the
+    other. ``async_entries_for_config_entry`` is the one spelling that has meant the same
+    thing throughout, and the suite has to pass on the oldest version this integration
+    supports as well as the newest.
     """
-    entry_ = dr.async_get(hass).async_get_device_by_identifier((DOMAIN, key), entry.entry_id)
-    assert entry_ is not None, f"no device registered for {key}"
-    return entry_.id
+    registry = dr.async_get(hass)
+    for device in dr.async_entries_for_config_entry(registry, entry.entry_id):
+        if (DOMAIN, key) in device.identifiers:
+            return device
+    raise AssertionError(f"no device registered for {key}")
+
+
+def device_id(hass: HomeAssistant, entry: MockConfigEntry, key: str) -> str:
+    return device_entry(hass, entry, key).id
 
 
 @pytest.fixture(autouse=True)

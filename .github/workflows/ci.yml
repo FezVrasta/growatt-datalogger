@@ -41,15 +41,25 @@ jobs:
           path: packages/growatt-protocol/dist/*
 
   integration:
-    name: Home Assistant integration
+    # Both legs, because the Python version is what decides which Home Assistant pip
+    # resolves: 3.13 caps it around 2026.2 while 3.14 gets the current release. Users
+    # install this through HACS onto whatever version they happen to run, and testing
+    # only one of them is how a fix for a deprecation removed in a future release
+    # shipped as a crash on the version most people are on today.
+    name: Home Assistant integration (py${{ matrix.python }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python }}
       - run: pip install ./packages/growatt-protocol
       - run: pip install pytest pytest-asyncio hypothesis pytest-homeassistant-custom-component
+      - run: python -c "from homeassistant.const import __version__; print('Home Assistant', __version__)"
       - run: python -m pytest tests -q
 
   manifest:

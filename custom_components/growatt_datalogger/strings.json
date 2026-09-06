@@ -168,6 +168,10 @@
     "unconfident_profile": {
       "title": "Could not identify Growatt inverter {serial}",
       "description": "The register layout reported by inverter {serial} does not match any family this integration knows, so its readings are being decoded as `{profile}` — a guess. If the values look right, you can ignore this. If they look wrong (a daily yield in the millions, a temperature in the hundreds), open the integration's options, choose **Inverter profiles**, and pin a profile for this inverter. Off-grid SPF models, and some SPH models behind a ShineWiFi-S, need the `offgrid` profile."
+    },
+    "encrypted_session": {
+      "title": "Growatt datalogger is sending encrypted data",
+      "description": "A datalogger has connected and is uploading records, but it opened the connection by negotiating a session key and everything it sends is encrypted. This integration cannot read it, so no devices or sensors are created.\n\nThis has been seen on ShineWiFi sticks with 2024-and-later firmware. Neither the key exchange nor the cipher is documented, and the key comes from Growatt's own server.\n\n**Worth trying:** turn the cloud relay **off** in the integration's options and reboot the stick. When the relay is on, the stick completes the key exchange with Growatt's server; without it there is a chance the stick falls back to the older unencrypted protocol.\n\nPlease report your stick model and firmware version on the issue linked below — that is what would make support possible."
     }
   }
 }

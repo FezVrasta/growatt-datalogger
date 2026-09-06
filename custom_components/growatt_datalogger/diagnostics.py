@@ -44,11 +44,16 @@ async def async_get_config_entry_diagnostics(
             # "announced but no data" and "clock never set" are the same report. The
             # session has always known; nothing asked it until now.
             "time_synced": session.time_synced,
+            # The one failure that produces no devices at all, so nothing else in this
+            # dump would hint at it. See issue #3.
+            "key_exchange": session.key_exchange,
+            "encrypted": session.encrypted,
             "inverter": session.inverter_serial,
             "records": session.stats.records,
             "acknowledged": session.stats.acknowledged,
             "pings": session.stats.pings,
             "decode_errors": session.stats.decode_errors,
+            "encrypted_records": session.stats.encrypted_records,
             "crc_mismatches": session.stats.crc_mismatches,
             "unknown_functions": {
                 f"{code:#04x}": count for code, count in session.stats.unknown_functions.items()

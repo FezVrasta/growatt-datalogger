@@ -177,3 +177,62 @@ async def test_ranges_are_exposed_for_profile_resolution(make_session: MakeSessi
     )
 
     assert records[0].ranges == ((3000, 3124), (3125, 3249))
+
+
+# ----------------------------------------------------------------------------------
+# Encrypted sessions
+# ----------------------------------------------------------------------------------
+
+
+async def _encrypted_connection(make_session: MakeSession) -> tuple[Session, list[bytes]]:
+    """A session that has seen the key exchange, then an unreadable record.
+
+    Shaped from the capture on https://github.com/FezVrasta/growatt-datalogger/issues/3:
+    the handshake is the first frame of the connection and is *not* 16-byte aligned,
+    every body after it is.
+    """
+    session, sent, _ = make_session()
+    await session.handle_frame(Frame(build_frame(b"x" * 84, function=0x41)))
+    await session.handle_frame(Frame(build_frame(bytes(832), function=0x04)))
+    return session, sent
+
+
+async def test_an_encrypted_session_is_reported_as_such(make_session: MakeSession) -> None:
+    """Not as a corrupt register group, which is what it looks like from inside."""
+    session, _ = await _encrypted_connection(make_session)
+
+    assert session.key_exchange
+    assert session.encrypted
+    assert session.stats.encrypted_records == 1
+
+
+async def test_an_encrypted_record_is_still_acknowledged(make_session: MakeSession) -> None:
+    """The device must not be left retransmitting because we cannot read it."""
+    _, sent = await _encrypted_connection(make_session)
+
+    assert len(sent) == 2  # the handshake and the record
+
+
+async def test_a_malformed_record_is_not_blamed_on_encryption(
+    make_session: MakeSession,
+) -> None:
+    """Without the handshake, a bad record is just a bad record."""
+    session, _, _ = make_session()
+    await session.handle_frame(Frame(build_frame(bytes(832), function=0x04)))
+
+    assert not session.encrypted
+    assert session.stats.decode_errors == 1
+    assert session.stats.encrypted_records == 0
+
+
+async def test_a_handshake_alone_does_not_declare_encryption(
+    make_session: MakeSession,
+) -> None:
+    """Seeing the offer is not the same as failing to read what follows."""
+    session, _, records = make_session()
+    await session.handle_frame(Frame(build_frame(b"x" * 84, function=0x41)))
+    await session.handle_frame(Frame(build_data_record()))
+
+    assert session.key_exchange
+    assert not session.encrypted
+    assert len(records) == 1

@@ -184,6 +184,14 @@ more than one register, so they change together.
 setting, and that nothing else on the machine is using port 5279. The **Connected** binary
 sensor tells you whether the datalogger has reached Home Assistant at all.
 
+**Nothing appears at all, and the log says the session is encrypted.** Some ShineWiFi
+sticks on 2024-and-later firmware open every connection by negotiating a session key with
+Growatt's server and encrypt everything after it. This integration cannot read that, so no
+devices are created; it raises a repair notice saying so. Worth trying: turn the **cloud
+relay off** and reboot the stick, in case it falls back to the older unencrypted protocol.
+Please report your stick model and firmware version on
+[issue #3](https://github.com/FezVrasta/growatt-datalogger/issues/3).
+
 **A setting won't change — "the inverter rejected …".** The message names the holding
 register and translates the inverter's answer, then reads that register back to say
 whether the inverter has it at all. *No such register* is the one worth reading closely:

@@ -36,6 +36,7 @@ from .const import (
     DEFAULT_RELAY_PORT,
     DOMAIN,
     EVENT_BUFFERED_RECORD,
+    ISSUE_ENCRYPTED_SESSION,
     ISSUE_UNCONFIDENT_PROFILE,
     KIND_DATALOGGER,
     KIND_INVERTER,
@@ -381,7 +382,34 @@ class GrowattHub:
         )
 
     @callback
+    def _sync_encryption_issue(self, session: Session) -> None:
+        """Say so when a datalogger is talking to us in a cipher we cannot read.
+
+        This is the one failure with nothing to show for itself: the connection is
+        healthy, records arrive, and not a single device or entity is created, because
+        decoding never gets far enough to learn a serial. Without a repair the
+        integration simply appears not to work.
+
+        Never withdrawn once raised. Every other repair here tracks a condition that can
+        resolve itself; this one is a property of the datalogger's firmware, and a device
+        that reconnects unencrypted would create its devices and speak for itself.
+        """
+        if not session.encrypted or self._issues.get(ISSUE_ENCRYPTED_SESSION):
+            return
+        self._issues[ISSUE_ENCRYPTED_SESSION] = True
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            ISSUE_ENCRYPTED_SESSION,
+            is_fixable=False,
+            severity=ir.IssueSeverity.ERROR,
+            translation_key="encrypted_session",
+            learn_more_url="https://github.com/FezVrasta/growatt-datalogger/issues/3",
+        )
+
+    @callback
     def _handle_connection_change(self, session: Session, connected: bool) -> None:
+        self._sync_encryption_issue(session)
         serial = session.datalogger_serial
         if serial is None:
             return

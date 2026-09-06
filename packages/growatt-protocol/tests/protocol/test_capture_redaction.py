@@ -8,7 +8,7 @@ useless as a fixture.
 from __future__ import annotations
 
 import pytest
-from growatt_protocol.crc import check_crc
+from growatt_protocol.crc import append_crc, check_crc
 from growatt_protocol.records import (
     Frame,
     parse_register_record,
@@ -85,3 +85,33 @@ def test_separate_runs_do_not_share_a_mapping() -> None:
 
 def test_a_short_frame_is_passed_through_untouched() -> None:
     assert redact(b"\x00\x01\x00", Pseudonymiser()) == b"\x00\x01\x00"
+
+
+def test_a_plaintext_frame_on_an_obfuscated_protocol_is_not_scrambled() -> None:
+    """Firmware exists that sends its key-exchange handshake unobfuscated on protocol 06.
+
+    Deobfuscating it yields random bytes, in which an 8-to-16-character upper-alphanumeric
+    run turns up often enough; rewriting one corrupted the only frame that explained the
+    capture. See https://github.com/FezVrasta/growatt-datalogger/issues/3.
+    """
+    body = b"Password&*20240730" + bytes(60)
+    # Built by hand: build_frame obfuscates, and the whole point is a frame that
+    # declares protocol 06 and is not obfuscated.
+    header = b"\x00\x01\x00\x06" + (2 + len(body)).to_bytes(2, "big") + b"\x01\x41"
+    frame = append_crc(header + body)
+
+    clean = redact(frame, Pseudonymiser())
+
+    # Edited in the view it is actually written in, so it stays readable...
+    assert b"Password&*" in clean
+    assert len(clean) == len(frame)
+    # ...and the one thing in it shaped like a serial is still replaced.
+    assert b"20240730" not in clean
+
+
+def test_an_encrypted_body_is_passed_through_untouched() -> None:
+    """There is no serial in ciphertext to replace, and rewriting it destroys evidence."""
+    ciphertext = bytes((i * 37 + 11) % 256 for i in range(64))
+    frame = append_crc(b"\x00\x01\x00\x06\x00\x42\x01\x04" + ciphertext)
+
+    assert redact(frame, Pseudonymiser()) == frame

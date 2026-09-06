@@ -81,6 +81,9 @@ class SessionStats:
     pings: int = 0
     decode_errors: int = 0
     crc_mismatches: int = 0
+    encrypted_records: int = 0
+    """Records that could not be decoded because the connection is encrypted."""
+
     unknown_functions: dict[int, int] = field(default_factory=dict)
 
 
@@ -141,6 +144,18 @@ class Session:
         self._next_send = 0.0
         """Loop time before which the next command must not go out."""
 
+        self.key_exchange = False
+        """Whether this connection began with a :attr:`~.records.Function.SESSION_KEY`
+        handshake, after which the device encrypts everything it sends."""
+
+        self.encrypted = False
+        """Set once a record has actually failed to decode on such a connection.
+
+        Separate from :attr:`key_exchange` on purpose: seeing the handshake only says
+        the device offered to encrypt. This says it did, and that nothing here can read
+        what it sends.
+        """
+
         self.push_time_on_announce = True
         self.time_sync_delay = DEFAULT_TIME_SYNC_DELAY
         self.time_synced = False
@@ -185,6 +200,13 @@ class Session:
             self._handle_command_response(frame)
             return
 
+        if function == Function.SESSION_KEY:
+            # Not answered -- the key exchange is not implemented -- but noted, because
+            # it is what explains every record after it failing to decode. Falls through
+            # to the unknown-function acknowledgement below, which is what a device
+            # waiting on a reply needs either way.
+            self.key_exchange = True
+
         if function == Function.IGNORED:
             return
 
@@ -209,6 +231,16 @@ class Session:
         self._note_unknown(function)
         await self._reply(build_ack(frame))
 
+    def _is_encrypted(self, frame: Frame) -> bool:
+        """Whether a failed decode is ciphertext rather than a malformed record.
+
+        Two signals together, because either alone is circumstantial: the connection
+        opened with a key exchange, and the body is padded to a 16-byte boundary. On this
+        firmware every body is -- acknowledgements included, where the plaintext protocol
+        uses three bytes -- while the handshake that turns it on is not.
+        """
+        return self.key_exchange and len(frame.body) % 16 == 0
+
     async def _reply(self, data: bytes) -> None:
         if self.suppress_replies:
             return
@@ -232,6 +264,19 @@ class Session:
             payload = parse_register_record(frame)
         except RecordError as error:
             self.stats.decode_errors += 1
+            if self._is_encrypted(frame):
+                self.stats.encrypted_records += 1
+                if not self.encrypted:
+                    self.encrypted = True
+                    _LOGGER.warning(
+                        "connection %s: this datalogger negotiated an encrypted session "
+                        "(function %#04x) and its records cannot be read. No devices "
+                        "will appear. See "
+                        "https://github.com/FezVrasta/growatt-datalogger/issues/3",
+                        self.connection_id,
+                        Function.SESSION_KEY,
+                    )
+                return
             _LOGGER.warning(
                 "connection %s: could not decode a %#04x record: %s",
                 self.connection_id,

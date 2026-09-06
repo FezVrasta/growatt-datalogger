@@ -63,6 +63,9 @@ EVENT_BUFFERED_RECORD: Final = f"{DOMAIN}_buffered_record"
 # Repairs ---------------------------------------------------------------------
 
 ISSUE_UNCONFIDENT_PROFILE: Final = "unconfident_profile_{serial}"
+#: Not keyed by serial: an encrypted connection never gets as far as saying
+#: which datalogger it is.
+ISSUE_ENCRYPTED_SESSION: Final = "encrypted_session"
 """Raised when a record's register layout matches no family we know.
 
 The values still decode, so nothing looks broken from the outside -- which is exactly

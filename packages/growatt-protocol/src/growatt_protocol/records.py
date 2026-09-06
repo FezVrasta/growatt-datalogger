@@ -61,6 +61,20 @@ class Function(IntEnum):
     METER_1E = 0x1E
     METER_20 = 0x20
 
+    SESSION_KEY = 0x41
+    """Session-key handshake, on firmware that encrypts the rest of the connection.
+
+    The first frame of the connection, before the ping: the device offers a password and
+    a firmware date, and the server answers with a key. Every body after it is ciphertext
+    padded to a 16-byte boundary, so the XOR this package implements produces nonsense
+    and a record decodes as an absurd register range.
+
+    Neither the key exchange nor the cipher is implemented. What matters is recognising
+    it, so the failure reads as "this connection is encrypted" rather than as a corrupt
+    register group -- see :attr:`~..session.Session.encrypted`.
+    https://github.com/FezVrasta/growatt-datalogger/issues/3
+    """
+
     IGNORED = 0x29
     """Observed in the wild; expects no reply."""
 

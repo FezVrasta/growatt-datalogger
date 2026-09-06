@@ -24,9 +24,6 @@ from .const import (
 from .entity import GrowattEntity
 from .metadata import UNKNOWN_REGISTER_META, ValueMeta, describe, pretty
 
-#: Names handled by another platform, so the sensor platform must skip them.
-_NOT_SENSORS: frozenset[str] = frozenset()
-
 #: Counters the hub maintains, which must not be restored from a previous run -- they
 #: count this process's records, so a restored value would jump backwards and confuse
 #: the statistics engine.
@@ -45,9 +42,7 @@ async def async_setup_entry(
         device = hub.devices.get(device_key)
         if device is None:
             return
-        async_add_entities(
-            GrowattSensor(hub, device, name) for name in names if name not in _NOT_SENSORS
-        )
+        async_add_entities(GrowattSensor(hub, device, name) for name in names)
 
     entry.async_on_unload(
         async_dispatcher_connect(hass, SIGNAL_NEW_DEVICE.format(entry_id=entry.entry_id), _add)

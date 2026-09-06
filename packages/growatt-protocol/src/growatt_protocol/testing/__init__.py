@@ -13,14 +13,31 @@ implementation that assumes one read equals one record.
 from __future__ import annotations
 
 from .datalogger import FakeDatalogger
-from .frames import build_data_record, build_frame, build_group, build_register_body
+from .frames import (
+    build_command_response,
+    build_data_record,
+    build_frame,
+    build_group,
+    build_range_write_response,
+    build_read_response,
+    build_register_body,
+    build_write_response,
+)
+from .inverter import FakeInverter, request_register, request_values
 from .upstream import FakeUpstream
 
 __all__ = [
     "FakeDatalogger",
+    "FakeInverter",
     "FakeUpstream",
+    "build_command_response",
     "build_data_record",
     "build_frame",
     "build_group",
+    "build_range_write_response",
+    "build_read_response",
     "build_register_body",
+    "build_write_response",
+    "request_register",
+    "request_values",
 ]

@@ -19,7 +19,7 @@ import logging
 from typing import Any
 
 import voluptuous as vol
-from growatt_protocol import CommandTimeout, commands
+from growatt_protocol import CommandTimeout, commands, settings
 from homeassistant.const import ATTR_UNIT_OF_MEASUREMENT
 from homeassistant.core import (
     HomeAssistant,
@@ -32,6 +32,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .hub import GrowattHub
@@ -186,6 +187,9 @@ def async_register_services(hass: HomeAssistant) -> None:
         else:
             if not isinstance(value, int):
                 raise ServiceValidationError("Inverter registers take an integer, not a string")
+            # whole_slot=False deliberately: this is the raw escape hatch, and someone
+            # poking 1080 by hand means that register and no other. The entities are
+            # where a charge window is treated as one setting.
             command = commands.write_inverter(serial, session.protocol, register, value)
 
         try:
@@ -196,10 +200,14 @@ def async_register_services(hass: HomeAssistant) -> None:
             raise HomeAssistantError(str(err)) from err
 
         if not response.ok:
-            raise HomeAssistantError(
-                f"The device rejected the write to register {register}: "
-                f"{commands.describe_result(response.result)}"
-            )
+            if target == TARGET_DATALOGGER:
+                raise HomeAssistantError(
+                    f"The datalogger rejected the write to register {register}: "
+                    f"{commands.describe_result(response.result)}"
+                )
+            # An unfamiliar register is exactly where "result 2" is least useful, so the
+            # raw service gets the same diagnosis the entities do.
+            raise HomeAssistantError(await settings.explain_rejection(session, register, response))
         return {"register": response.register, "result": response.result}
 
     async def _write_many(call: ServiceCall) -> ServiceResponse:
@@ -243,17 +251,7 @@ def async_register_services(hass: HomeAssistant) -> None:
 
     async def _sync_time(call: ServiceCall) -> None:
         hub, serial = _resolve(hass, call.data[ATTR_DEVICE_ID])
-        session = _session(hub, serial)
-        command = commands.set_time(serial, session.protocol, dt_now())
-        try:
-            response = await session.send_command(command)
-        except (CommandTimeout, ConnectionError) as err:
-            raise HomeAssistantError(str(err)) from err
-        if not response.ok:
-            raise HomeAssistantError(
-                f"The datalogger rejected the clock update: "
-                f"{commands.describe_result(response.result)}"
-            )
+        await async_sync_clock(_session(hub, serial), serial)
 
     async def _adopt_history(call: ServiceCall) -> ServiceResponse:
         """Hand a Growatt entity the entity id of the one that used to read this inverter.
@@ -387,12 +385,24 @@ def async_register_services(hass: HomeAssistant) -> None:
     )
 
 
-def dt_now():
-    """Local wall-clock time.
+async def async_sync_clock(session: Any, serial: str) -> None:
+    """Set ``serial``'s clock to Home Assistant's local time.
 
-    Local rather than UTC on purpose: the timestamps a datalogger puts in its own
+    Shared with the Sync time button rather than written twice: the two had drifted into
+    the same six steps and the same user-facing sentence, which is one string too many to
+    keep in step by hand.
+
+    Local time rather than UTC on purpose -- the timestamps a datalogger puts in its own
     records are local, so setting its clock to UTC would silently shift every record.
     """
-    from homeassistant.util import dt as dt_util
+    try:
+        response = await session.send_command(
+            commands.set_time(serial, session.protocol, dt_util.now())
+        )
+    except (CommandTimeout, ConnectionError) as err:
+        raise HomeAssistantError(str(err)) from err
 
-    return dt_util.now()
+    if not response.ok:
+        raise HomeAssistantError(
+            f"The datalogger rejected the clock update: {commands.describe_result(response.result)}"
+        )

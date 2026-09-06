@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "growatt-protocol"
-version = "0.4.0"
+version = "0.5.0"
 description = "The Growatt datalogger upload protocol (TCP 5279) and its register semantics"
 readme = "README.md"
 requires-python = ">=3.13"

@@ -1,12 +1,61 @@
-"""Shared entity base."""
+"""Shared entity base, and the two ways a platform gets told about a device."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
+
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, KIND_DATALOGGER
+from .const import DOMAIN, KIND_DATALOGGER, SIGNAL_NEW_DEVICE
 from .hub import GrowattCoordinator, GrowattDevice, GrowattHub
+
+
+def async_on_new_device(
+    hass: HomeAssistant, entry: Any, handler: Callable[[str, list[str]], None]
+) -> None:
+    """Call ``handler`` for every device this entry knows, now and as more appear.
+
+    Both halves matter and forgetting either is a silent bug: the dispatcher covers
+    devices that announce themselves later, and the replay covers the ones that were
+    restored from storage before this platform was set up. The signal is scoped by entry
+    id, since a globally named one would cross-talk between entries.
+    """
+    entry.async_on_unload(
+        async_dispatcher_connect(hass, SIGNAL_NEW_DEVICE.format(entry_id=entry.entry_id), handler)
+    )
+    entry.runtime_data.async_replay(handler)
+
+
+def async_setup_device_platform(
+    hass: HomeAssistant,
+    entry: Any,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+    kind: str,
+    factory: Callable[[GrowattHub, GrowattDevice], GrowattEntity],
+) -> None:
+    """Create one entity per device of ``kind``, as devices are discovered.
+
+    The dedupe set is the point: a device is announced on every record, and without it
+    the platform would add the same entity again on each one.
+    """
+    hub: GrowattHub = entry.runtime_data
+    created: set[str] = set()
+
+    @callback
+    def _add(device_key: str, _names: list[str]) -> None:
+        device = hub.devices.get(device_key)
+        if device is None or device.kind != kind or device_key in created:
+            return
+        created.add(device_key)
+        async_add_entities([factory(hub, device)])
+
+    async_on_new_device(hass, entry, _add)
 
 
 class GrowattEntity(CoordinatorEntity[GrowattCoordinator]):
@@ -39,7 +88,17 @@ class GrowattEntity(CoordinatorEntity[GrowattCoordinator]):
             if self.device.parent:
                 # Gives the correct topology: the inverter hangs off the datalogger, so
                 # losing the logger greys out the whole branch.
-                info["via_device"] = (DOMAIN, self.device.parent)
+                #
+                # By id rather than by identifier: `via_device` is deprecated and removed
+                # in Home Assistant 2027.8. The lookup is tolerated failing -- the hub
+                # publishes the datalogger's entities before the inverter's precisely so
+                # the parent exists by now, but a flat topology is a better outcome than
+                # an entity that refuses to be created.
+                parent = dr.async_get(self.hub.hass).async_get_device_by_identifier(
+                    (DOMAIN, self.device.parent), self.hub.entry.entry_id
+                )
+                if parent is not None:
+                    info["via_device_id"] = parent.id
         return info
 
     @property

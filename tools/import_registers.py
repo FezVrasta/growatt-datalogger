@@ -35,7 +35,19 @@ from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-OUTPUT_DIR = REPO_ROOT / "custom_components" / "growatt_datalogger" / "registers" / "tables"
+#: Where the generated tables actually live. They moved into the published package when
+#: the protocol was split out; this pointed at the old location for long enough that the
+#: script would recreate an empty tree, report success, and leave the real files
+#: untouched -- which quietly makes the provenance PROVENANCE.md promises unverifiable.
+OUTPUT_DIR = (
+    REPO_ROOT
+    / "packages"
+    / "growatt-protocol"
+    / "src"
+    / "growatt_protocol"
+    / "registers"
+    / "tables"
+)
 
 _TRANSFORM_NOTES = """\
 Divergences from the upstream definitions, applied by tools/import_registers.py:

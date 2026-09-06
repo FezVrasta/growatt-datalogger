@@ -56,17 +56,13 @@ class RelayConnection:
         self,
         config: RelayConfig,
         downstream_send: Callable[[bytes], asyncio.Future | asyncio.Task | None],
-        *,
-        on_state_change: Callable[[bool], None] | None = None,
     ) -> None:
         self.config = config
         self._downstream_send = downstream_send
-        self._on_state_change = on_state_change
 
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._pump: asyncio.Task[None] | None = None
-        self._buffered = 0
 
         self.connected = False
         self.degraded = False
@@ -95,7 +91,6 @@ class RelayConnection:
         self.connected = True
         self._pump = asyncio.create_task(self._pump_downstream())
         _LOGGER.debug("cloud relay connected to %s:%s", self.config.host, self.config.port)
-        self._notify()
         return True
 
     def forward(self, data: bytes) -> None:
@@ -144,15 +139,6 @@ class RelayConnection:
         self.degraded = True
         self.connected = False
         _LOGGER.info("cloud relay degraded; this connection is now acknowledged locally")
-        self._notify()
-
-    def _notify(self) -> None:
-        if self._on_state_change is None:
-            return
-        try:
-            self._on_state_change(self.connected)
-        except Exception:
-            _LOGGER.exception("relay state listener failed")
 
     async def close(self) -> None:
         self.connected = False

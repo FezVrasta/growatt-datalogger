@@ -26,7 +26,7 @@ from enum import IntEnum
 from .crc import append_crc
 from .crypt import OBFUSCATED_PROTOCOLS, obfuscate
 from .errors import RecordError
-from .records import Frame, Function
+from .records import Frame, Function, serial_width
 
 #: Datalogger parameter holding the wall clock, as an ASCII timestamp.
 REGISTER_TIME = 0x1F
@@ -38,8 +38,6 @@ REGISTER_SERVER_IP = 0x11
 REGISTER_SERVER_PORT = 0x12
 REGISTER_TIMEZONE = 0x1E
 
-_SERIAL_WIDTH = {2: 10, 5: 10, 6: 30}
-
 
 class Target(IntEnum):
     """What a command addresses."""
@@ -49,9 +47,7 @@ class Target(IntEnum):
 
 
 def _serial_field(serial: str, protocol: int) -> bytes:
-    width = _SERIAL_WIDTH.get(protocol)
-    if width is None:
-        raise RecordError(f"no serial width known for protocol {protocol}")
+    width = serial_width(protocol)
     encoded = serial.encode("ascii")
     if len(encoded) > width:
         raise RecordError(f"serial {serial!r} does not fit in {width} bytes")

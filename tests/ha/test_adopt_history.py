@@ -8,7 +8,6 @@ nothing about the one behaviour the feature depends on.
 
 from __future__ import annotations
 
-import asyncio
 from datetime import timedelta
 
 import pytest
@@ -30,6 +29,8 @@ from pytest_homeassistant_custom_component.components.recorder.common import (
 
 from custom_components.growatt_datalogger.const import DOMAIN
 
+from .conftest import settle
+
 OLD_ENTITY = "sensor.growatt_lifetime_energy_output"
 
 #: Registers 3051-3052 hold the lifetime output counter, in tenths of a kWh.
@@ -48,16 +49,10 @@ def mock_recorder_before_hass(async_test_recorder) -> None:
     """
 
 
-async def _settle(hass: HomeAssistant, times: int = 3) -> None:
-    for _ in range(times):
-        await asyncio.sleep(0.05)
-        await hass.async_block_till_done()
-
-
 async def _energy_entity(hass: HomeAssistant, device: FakeDatalogger) -> str:
     """Report a lifetime energy counter, and return the entity it created."""
     await device.send_data(groups=[_ENERGY_GROUP])
-    await _settle(hass)
+    await settle(hass)
 
     entity_id = er.async_get(hass).async_get_entity_id("sensor", DOMAIN, _UNIQUE_ID)
     assert entity_id is not None

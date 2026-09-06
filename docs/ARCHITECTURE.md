@@ -123,6 +123,13 @@ registers. A register no announce reports is asked for directly, but only once a
 proved the device is connected — reading at entity-add time happens during setup, before
 any datalogger has connected, and as a one-shot would never be retried.
 
+Those reads are batched. Which registers a device wants is known from its profile before
+any of them is asked for, so they go out as a handful of range reads rather than one
+command each — 27 registers in four commands on a storage inverter, not 27 behind a lock
+that spaces commands out. A range a device cannot answer in full comes back as an echo
+with no values, which would lose every register in it, so such a range is retried one at a
+time: the batch is an optimisation and must never return less than asking singly would.
+
 One entity is usually one register, with two exceptions. A charge or discharge window is
 three registers — start, stop, enable — that firmware validates as a unit, so all three go
 out as one `0x10` range with the sibling values read back from the inverter first. And a
@@ -130,7 +137,12 @@ rejected write costs one extra read before it is reported, so the message can di
 a register the model does not have from one it has and would not take this value for.
 Which registers belong to which family matters here: the SPH/SPA storage block at
 1000–1118 does not exist on a 3000-block hybrid, and offering it there produced entities
-whose every write came back "no such register".
+whose every write came back "no such register". So every writable register names the
+profiles it applies to, with no default — scope used to default to "every family", which
+is fail-open, and an off-grid SPF was being offered Protocol II registers on the strength
+of it despite that profile declaring no holding table at all. Two tests hold the line:
+every named profile must exist, and where a profile's read table and the writable table
+share a key they must agree on the address.
 
 ## Development
 

@@ -2,19 +2,17 @@
 
 from __future__ import annotations
 
-from growatt_protocol import CommandTimeout, commands
 from homeassistant.components.button import ButtonEntity
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
-from homeassistant.util import dt as dt_util
 
 from . import GrowattConfigEntry
-from .const import KIND_DATALOGGER, SIGNAL_NEW_DEVICE
-from .entity import GrowattEntity
+from .const import KIND_DATALOGGER
+from .entity import GrowattEntity, async_setup_device_platform
 from .hub import GrowattDevice, GrowattHub
+from .services import async_sync_clock
 
 SYNC_TIME = "sync_time"
 
@@ -24,21 +22,7 @@ async def async_setup_entry(
     entry: GrowattConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    hub = entry.runtime_data
-    created: set[str] = set()
-
-    @callback
-    def _add(device_key: str, _names: list[str]) -> None:
-        device = hub.devices.get(device_key)
-        if device is None or device.kind != KIND_DATALOGGER or device_key in created:
-            return
-        created.add(device_key)
-        async_add_entities([GrowattSyncTime(hub, device)])
-
-    entry.async_on_unload(
-        async_dispatcher_connect(hass, SIGNAL_NEW_DEVICE.format(entry_id=entry.entry_id), _add)
-    )
-    hub.async_replay(_add)
+    async_setup_device_platform(hass, entry, async_add_entities, KIND_DATALOGGER, GrowattSyncTime)
 
 
 class GrowattSyncTime(GrowattEntity, ButtonEntity):
@@ -59,16 +43,4 @@ class GrowattSyncTime(GrowattEntity, ButtonEntity):
         session = self.hub.session_for(self.device.serial)
         if session is None:
             raise HomeAssistantError(f"{self.device.serial} is not connected")
-
-        try:
-            response = await session.send_command(
-                commands.set_time(self.device.serial, session.protocol, dt_util.now())
-            )
-        except (CommandTimeout, ConnectionError) as err:
-            raise HomeAssistantError(str(err)) from err
-
-        if not response.ok:
-            raise HomeAssistantError(
-                f"The datalogger rejected the clock update: "
-                f"{commands.describe_result(response.result)}"
-            )
+        await async_sync_clock(session, self.device.serial)

@@ -27,12 +27,7 @@ from custom_components.growatt_datalogger.const import (
 )
 from custom_components.growatt_datalogger.hub import device_key
 
-
-async def _settle(hass: HomeAssistant, times: int = 3) -> None:
-    """Let the socket handler and the resulting state writes drain."""
-    for _ in range(times):
-        await asyncio.sleep(0.05)
-        await hass.async_block_till_done()
+from .conftest import INVERTER, SERIAL, device_id, settle
 
 
 async def test_setup_and_unload(hass: HomeAssistant, setup_integration: MockConfigEntry) -> None:
@@ -78,7 +73,7 @@ async def test_a_record_creates_devices_and_sensors(
     hass: HomeAssistant, setup_integration: MockConfigEntry, device: FakeDatalogger
 ) -> None:
     await device.send_data(groups=[build_group(3000, [1, 0, 25850, 3295, 7, 0, 2585])])
-    await _settle(hass)
+    await settle(hass)
 
     entity_registry = er.async_get(hass)
     entries = er.async_entries_for_config_entry(entity_registry, setup_integration.entry_id)
@@ -94,11 +89,12 @@ async def test_device_topology_uses_via_device(
 ) -> None:
     """The inverter hangs off the datalogger, so losing the logger greys the branch."""
     await device.send_data()
-    await _settle(hass)
+    await settle(hass)
 
     registry = dr.async_get(hass)
-    logger = registry.async_get_device({(DOMAIN, "logger:GPG0EXAMP1")})
-    inverter = registry.async_get_device({(DOMAIN, "inverter:SML0EXAMP2")})
+    entry_id = setup_integration.entry_id
+    logger = registry.async_get_device_by_identifier((DOMAIN, f"logger:{SERIAL}"), entry_id)
+    inverter = registry.async_get_device_by_identifier((DOMAIN, f"inverter:{INVERTER}"), entry_id)
 
     assert logger is not None
     assert inverter is not None
@@ -110,7 +106,7 @@ async def test_decoded_values_reach_entity_state(
 ) -> None:
     # register 3003 is PV1 voltage in tenths of a volt.
     await device.send_data(groups=[build_group(3000, [1, 0, 0, 3295])])
-    await _settle(hass)
+    await settle(hass)
 
     entity_registry = er.async_get(hass)
     entity_id = entity_registry.async_get_entity_id(
@@ -127,16 +123,15 @@ async def test_a_second_inverter_appears_without_a_reload(
     hass: HomeAssistant, setup_integration: MockConfigEntry, device: FakeDatalogger
 ) -> None:
     await device.send_data()
-    await _settle(hass)
+    await settle(hass)
 
     other = FakeDatalogger(datalogger_serial="GPG0OTHER1", inverter_serial="SML0OTHER2")
     await other.connect("127.0.0.1", setup_integration.runtime_data.port)
     try:
         await other.send_data()
-        await _settle(hass)
+        await settle(hass)
 
-        registry = dr.async_get(hass)
-        assert registry.async_get_device({(DOMAIN, "inverter:SML0OTHER2")}) is not None
+        assert device_id(hass, setup_integration, "inverter:SML0OTHER2")
     finally:
         await other.close()
 
@@ -160,13 +155,13 @@ async def test_connectivity_survives_the_reconnect_gap(
     constantly about a device that was working perfectly.
     """
     await device.send_data()
-    await _settle(hass)
+    await settle(hass)
 
     entity_id = await _connectivity_entity(hass)
     assert hass.states.get(entity_id).state == "on"
 
     await device.close()
-    await _settle(hass, times=5)
+    await settle(hass, times=5)
     assert hass.states.get(entity_id).state == "on"
 
 
@@ -180,11 +175,11 @@ async def test_connectivity_goes_off_after_prolonged_silence(
     deadlocks the socket server the moment anything awaits.
     """
     await device.send_data()
-    await _settle(hass)
+    await settle(hass)
     entity_id = await _connectivity_entity(hass)
 
     await device.close()
-    await _settle(hass)
+    await settle(hass)
     assert hass.states.get(entity_id).state == "on"
 
     hub = setup_integration.runtime_data
@@ -206,7 +201,7 @@ async def test_buffered_records_fire_an_event_and_do_not_touch_live_state(
     hass.bus.async_listen(f"{DOMAIN}_buffered_record", events.append)
 
     await device.send_data(groups=[build_group(3000, [1, 0, 0, 3295])])
-    await _settle(hass)
+    await settle(hass)
 
     entity_registry = er.async_get(hass)
     entity_id = entity_registry.async_get_entity_id(
@@ -215,7 +210,7 @@ async def test_buffered_records_fire_an_event_and_do_not_touch_live_state(
     live = hass.states.get(entity_id).state
 
     await device.send_buffered(groups=[build_group(3000, [1, 0, 0, 9999])])
-    await _settle(hass)
+    await settle(hass)
 
     assert hass.states.get(entity_id).state == live, "buffered data overwrote live state"
     assert len(events) == 1
@@ -227,7 +222,7 @@ async def test_devices_survive_a_restart_before_any_packet(
 ) -> None:
     """Without this, a restart after sunset empties every dashboard until sunrise."""
     await device.send_data()
-    await _settle(hass)
+    await settle(hass)
     await device.close()
 
     # Force the debounced store write out, then reload.
@@ -235,8 +230,7 @@ async def test_devices_survive_a_restart_before_any_packet(
     await hass.config_entries.async_reload(setup_integration.entry_id)
     await hass.async_block_till_done()
 
-    registry = dr.async_get(hass)
-    assert registry.async_get_device({(DOMAIN, "inverter:SML0EXAMP2")}) is not None
+    assert device_id(hass, setup_integration, f"inverter:{INVERTER}")
 
 
 @pytest.mark.parametrize("chunk_size", [1, 5])
@@ -247,7 +241,7 @@ async def test_fragmented_records_still_produce_state(
     await logger.connect("127.0.0.1", setup_integration.runtime_data.port)
     try:
         await logger.send_data(groups=[build_group(3000, [1, 0, 0, 3295])])
-        await _settle(hass, times=5)
+        await settle(hass, times=5)
 
         entity_registry = er.async_get(hass)
         entity_id = entity_registry.async_get_entity_id(
@@ -270,7 +264,7 @@ async def test_an_announce_does_not_wipe_the_telemetry(
     populates once and then goes 'unknown' for good.
     """
     await device.send_data(groups=[build_group(3000, [1, 0, 0, 3295])])
-    await _settle(hass)
+    await settle(hass)
 
     entity_registry = er.async_get(hass)
     entity_id = entity_registry.async_get_entity_id(
@@ -281,7 +275,7 @@ async def test_an_announce_does_not_wipe_the_telemetry(
 
     # An announce arrives, as it does on every reconnect.
     await device.send_announce(groups=[build_group(0, [1, 0, 0])])
-    await _settle(hass)
+    await settle(hass)
 
     assert hass.states.get(entity_id).state != "unknown", "the announce wiped telemetry"
     assert float(hass.states.get(entity_id).state) == 329.5
@@ -299,7 +293,7 @@ async def test_only_telemetry_decides_the_profile(
     no battery.
     """
     await device.send_data(groups=[build_group(3000, [1, 0, 0, 3295])])
-    await _settle(hass)
+    await settle(hass)
 
     hub = setup_integration.runtime_data
     inverter = hub.devices["inverter:SML0EXAMP2"]
@@ -307,6 +301,6 @@ async def test_only_telemetry_decides_the_profile(
 
     # An announce whose ranges would otherwise resolve to a storage profile.
     await device.send_announce(groups=[build_group(3000, [0] * 125), build_group(3125, [0] * 125)])
-    await _settle(hass)
+    await settle(hass)
 
     assert inverter.profile == "protocol_ii_3000", "the announce changed the profile"

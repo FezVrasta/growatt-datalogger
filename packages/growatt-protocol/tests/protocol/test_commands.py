@@ -18,11 +18,6 @@ from growatt_protocol.testing.frames import build_frame
 SERIAL = "GPG0EXAMP1"
 
 
-def _decode(frame: bytes) -> bytes:
-    """The plaintext body of a frame we built."""
-    return Frame(frame).body
-
-
 @pytest.mark.parametrize("protocol", [2, 5, 6])
 def test_serial_field_width_matches_the_protocol(protocol: int) -> None:
     command = commands.read_inverter(SERIAL, protocol, 3)

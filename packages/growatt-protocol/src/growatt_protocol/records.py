@@ -85,7 +85,23 @@ COMMAND_RESPONSE_FUNCTIONS = frozenset(
 
 #: Serial field width in bytes, by protocol version. Protocol 06 pads both serial
 #: fields to 30 bytes; 02 and 05 use 10.
-_SERIAL_WIDTH = {2: 10, 5: 10, 6: 30}
+#:
+#: Every offset in a body is measured from the end of this field, so this is the one
+#: table the whole package reads it from -- :mod:`.commands` when it builds a request and
+#: when it parses the reply, :mod:`.testing.frames` when it fakes one. A second copy that
+#: drifted would put the reader and the writer at different offsets on one protocol only,
+#: which is the kind of thing that passes every test on protocol 06 and fails in the
+#: field on a ShineWiFi-S.
+SERIAL_WIDTH = {2: 10, 5: 10, 6: 30}
+
+
+def serial_width(protocol: int) -> int:
+    """Bytes a serial number is padded to on ``protocol``."""
+    try:
+        return SERIAL_WIDTH[protocol]
+    except KeyError:
+        raise RecordError(f"no serial width known for protocol {protocol}") from None
+
 
 _TIMESTAMP_LENGTH = 6
 
@@ -171,10 +187,7 @@ class Frame:
 
     @property
     def serial_width(self) -> int:
-        try:
-            return _SERIAL_WIDTH[self.protocol]
-        except KeyError:
-            raise RecordError(f"no serial width known for protocol {self.protocol}") from None
+        return serial_width(self.protocol)
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return (

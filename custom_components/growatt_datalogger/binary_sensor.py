@@ -19,7 +19,6 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
 )
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
@@ -29,9 +28,8 @@ from .const import (
     CONNECTIVITY_GRACE,
     CONNECTIVITY_INTERVAL,
     KIND_DATALOGGER,
-    SIGNAL_NEW_DEVICE,
 )
-from .entity import GrowattEntity
+from .entity import GrowattEntity, async_setup_device_platform
 from .hub import GrowattDevice, GrowattHub
 
 CONNECTED = "connected"
@@ -42,23 +40,9 @@ async def async_setup_entry(
     entry: GrowattConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    hub = entry.runtime_data
-    created: set[str] = set()
-
-    @callback
-    def _add(device_key: str, _names: list[str]) -> None:
-        device = hub.devices.get(device_key)
-        if device is None or device.kind != KIND_DATALOGGER:
-            return
-        if device_key in created:
-            return
-        created.add(device_key)
-        async_add_entities([GrowattConnectivity(hub, device)])
-
-    entry.async_on_unload(
-        async_dispatcher_connect(hass, SIGNAL_NEW_DEVICE.format(entry_id=entry.entry_id), _add)
+    async_setup_device_platform(
+        hass, entry, async_add_entities, KIND_DATALOGGER, GrowattConnectivity
     )
-    hub.async_replay(_add)
 
 
 class GrowattConnectivity(GrowattEntity, BinarySensorEntity):

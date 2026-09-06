@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+from . import profiles
 from .base import Confidence
 
 
@@ -62,8 +63,19 @@ class WritableRegister:
     source: str
     """Where the meaning comes from, so a reader can judge it for themselves."""
 
-    profiles: frozenset[str] = frozenset()
-    """Profiles this applies to. Empty means every profile."""
+    profiles: frozenset[str]
+    """Exactly which profiles this applies to. No default, deliberately.
+
+    It used to default to "every profile", which is fail-open, and issue #2 is what
+    fail-open costs. There was a live instance of it too: :data:`~.profiles.OFFGRID` is
+    composed with *no holding table at all* -- this project's own model saying it knows
+    nothing about that family's holding space -- and yet an off-grid SPF was offered
+    holding 0 and 3 on the strength of an unstated default. An SPF's holding map is not
+    the Protocol II one.
+
+    Requiring the field means a new entry cannot be added without someone answering the
+    question, and :func:`for_profile` no longer has a branch that says yes to everything.
+    """
 
     encoding: Encoding = Encoding.RAW
     minimum: float = 0
@@ -124,11 +136,129 @@ _SPEC_II = "Growatt Inverter Modbus RTU Protocol II"
 #: read of a register the inverter does not have comes back empty and the entity simply
 #: stays unknown, while a write comes back "result 2 -- no such register". That is
 #: https://github.com/FezVrasta/growatt-datalogger/issues/2.
-STORAGE_1000_BLOCK = frozenset({"storage_1000"})
+#:
+#: Named off :mod:`.profiles` rather than spelled as a string: a typo in a bare
+#: ``"storage_1000"`` fails silently -- ``for_profile`` simply returns nothing for that
+#: family, which looks exactly like a device with no writable settings.
+STORAGE_1000_BLOCK = frozenset({profiles.STORAGE_1000.key})
 
 #: Hybrids that report the 3000 block. The bit-packed schedule at 3038-3059 has no entity
 #: here yet; 3049 is the one setting whose address is settled.
-STORAGE_3000_BLOCK = frozenset({"storage_3000"})
+STORAGE_3000_BLOCK = frozenset({profiles.STORAGE_3000.key})
+
+#: Families whose holding space is the documented Protocol II low bank, where registers 0
+#: and 3 mean what the specification says they mean.
+#:
+#: Every family this project understands the holding space of, which is to say every one
+#: except :data:`~.profiles.OFFGRID`. That profile is composed with no holding table at
+#: all, so there is nothing here to base a write on: an SPF's holding map is a different
+#: map, and writing register 3 on one on the strength of a Protocol II reading would be
+#: exactly the kind of guess this table exists to avoid.
+PROTOCOL_II_HOLDING = frozenset(
+    {
+        profiles.PROTOCOL_II.key,
+        profiles.PROTOCOL_II_3000.key,
+        profiles.STORAGE_1000.key,
+        profiles.STORAGE_3000.key,
+        # The legacy map declares 0 and 3 with the same two meanings.
+        profiles.LEGACY_315.key,
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class TimeSlot:
+    """One charge or discharge window: a start, a stop, and the switch that arms it.
+
+    Firmware validates the three as a unit rather than a register at a time. A window
+    written one register at a time passes through a moment where the start is the new
+    value and the stop is still the old one -- an inverted or overlapping window that
+    some firmware rejects outright and some acts on. And enabling a slot whose window is
+    still 00:00-00:00 is refused, which only makes sense once you see that the three
+    registers are one setting. Sending them as a single 0x10 range is what Growatt's own
+    app does.
+
+    So a slot is declared here once, and its three :class:`WritableRegister` entries are
+    generated from it. The registers are always contiguous, in this order.
+    """
+
+    schedule: str
+    """``grid_first`` or ``battery_first`` -- the key prefix its entries take."""
+
+    number: int
+    """1, 2 or 3, numbered as the Growatt app numbers them."""
+
+    start: int
+    """Holding register of the window start."""
+
+    profiles: frozenset[str]
+    enable_icon: str
+
+    @property
+    def registers(self) -> tuple[int, int, int]:
+        return (self.start, self.start + 1, self.start + 2)
+
+    @property
+    def suffix(self) -> str:
+        """Slot 1 goes unsuffixed, matching how the app presents it."""
+        return "" if self.number == 1 else f"_{self.number}"
+
+    def entries(self) -> tuple[WritableRegister, ...]:
+        start, stop, enable = self.registers
+        common = {
+            "confidence": Confidence.VERIFIED,
+            "profiles": self.profiles,
+        }
+        return (
+            WritableRegister(
+                key=f"{self.schedule}_start_time{self.suffix}",
+                register=start,
+                kind=WriteKind.TIME,
+                source=f"{_SPEC_II}, holding register {start}",
+                encoding=Encoding.HHMM,
+                icon="mdi:clock-start",
+                **common,
+            ),
+            WritableRegister(
+                key=f"{self.schedule}_stop_time{self.suffix}",
+                register=stop,
+                kind=WriteKind.TIME,
+                source=f"{_SPEC_II}, holding register {stop}",
+                encoding=Encoding.HHMM,
+                icon="mdi:clock-end",
+                **common,
+            ),
+            WritableRegister(
+                key=f"{self.schedule}_enabled{self.suffix}",
+                register=enable,
+                kind=WriteKind.SWITCH,
+                source=f"{_SPEC_II}, holding register {enable}",
+                encoding=Encoding.BOOL,
+                icon=self.enable_icon,
+                **common,
+            ),
+        )
+
+
+#: Every window, spelled out rather than computed: these are documented register numbers
+#: and a reader should be able to check them against the spec without doing arithmetic.
+TIME_SLOTS: tuple[TimeSlot, ...] = (
+    TimeSlot("grid_first", 1, 1080, STORAGE_1000_BLOCK, "mdi:transmission-tower"),
+    TimeSlot("grid_first", 2, 1083, STORAGE_1000_BLOCK, "mdi:transmission-tower"),
+    TimeSlot("grid_first", 3, 1086, STORAGE_1000_BLOCK, "mdi:transmission-tower"),
+    TimeSlot("battery_first", 1, 1100, STORAGE_1000_BLOCK, "mdi:battery-clock"),
+    TimeSlot("battery_first", 2, 1103, STORAGE_1000_BLOCK, "mdi:battery-clock"),
+    TimeSlot("battery_first", 3, 1106, STORAGE_1000_BLOCK, "mdi:battery-clock"),
+)
+
+
+def slot_for(register: int) -> TimeSlot | None:
+    """The window ``register`` is part of, or ``None`` if it stands alone."""
+    for slot in TIME_SLOTS:
+        if register in slot.registers:
+            return slot
+    return None
+
 
 WRITABLE: tuple[WritableRegister, ...] = (
     # ---- Documented in the specification -------------------------------------------
@@ -138,6 +268,7 @@ WRITABLE: tuple[WritableRegister, ...] = (
         kind=WriteKind.NUMBER,
         confidence=Confidence.VERIFIED,
         source=f"{_SPEC_II}, holding register 3",
+        profiles=PROTOCOL_II_HOLDING,
         minimum=0,
         maximum=100,
         unit="%",
@@ -149,6 +280,7 @@ WRITABLE: tuple[WritableRegister, ...] = (
         kind=WriteKind.SWITCH,
         confidence=Confidence.VERIFIED,
         source=f"{_SPEC_II}, holding register 0",
+        profiles=PROTOCOL_II_HOLDING,
         encoding=Encoding.BOOL,
         icon="mdi:power",
     ),
@@ -211,96 +343,6 @@ WRITABLE: tuple[WritableRegister, ...] = (
         icon="mdi:transmission-tower-export",
     ),
     WritableRegister(
-        key="grid_first_start_time",
-        register=1080,
-        kind=WriteKind.TIME,
-        confidence=Confidence.VERIFIED,
-        source=f"{_SPEC_II}, holding register 1080",
-        profiles=STORAGE_1000_BLOCK,
-        encoding=Encoding.HHMM,
-        icon="mdi:clock-start",
-    ),
-    WritableRegister(
-        key="grid_first_stop_time",
-        register=1081,
-        kind=WriteKind.TIME,
-        confidence=Confidence.VERIFIED,
-        source=f"{_SPEC_II}, holding register 1081",
-        profiles=STORAGE_1000_BLOCK,
-        encoding=Encoding.HHMM,
-        icon="mdi:clock-end",
-    ),
-    WritableRegister(
-        key="grid_first_enabled",
-        register=1082,
-        kind=WriteKind.SWITCH,
-        confidence=Confidence.VERIFIED,
-        source=f"{_SPEC_II}, holding register 1082",
-        profiles=STORAGE_1000_BLOCK,
-        encoding=Encoding.BOOL,
-        icon="mdi:transmission-tower",
-    ),
-    WritableRegister(
-        key="grid_first_start_time_2",
-        register=1083,
-        kind=WriteKind.TIME,
-        confidence=Confidence.VERIFIED,
-        source=f"{_SPEC_II}, holding register 1083",
-        profiles=STORAGE_1000_BLOCK,
-        encoding=Encoding.HHMM,
-        icon="mdi:clock-start",
-    ),
-    WritableRegister(
-        key="grid_first_stop_time_2",
-        register=1084,
-        kind=WriteKind.TIME,
-        confidence=Confidence.VERIFIED,
-        source=f"{_SPEC_II}, holding register 1084",
-        profiles=STORAGE_1000_BLOCK,
-        encoding=Encoding.HHMM,
-        icon="mdi:clock-end",
-    ),
-    WritableRegister(
-        key="grid_first_enabled_2",
-        register=1085,
-        kind=WriteKind.SWITCH,
-        confidence=Confidence.VERIFIED,
-        source=f"{_SPEC_II}, holding register 1085",
-        profiles=STORAGE_1000_BLOCK,
-        encoding=Encoding.BOOL,
-        icon="mdi:transmission-tower",
-    ),
-    WritableRegister(
-        key="grid_first_start_time_3",
-        register=1086,
-        kind=WriteKind.TIME,
-        confidence=Confidence.VERIFIED,
-        source=f"{_SPEC_II}, holding register 1086",
-        profiles=STORAGE_1000_BLOCK,
-        encoding=Encoding.HHMM,
-        icon="mdi:clock-start",
-    ),
-    WritableRegister(
-        key="grid_first_stop_time_3",
-        register=1087,
-        kind=WriteKind.TIME,
-        confidence=Confidence.VERIFIED,
-        source=f"{_SPEC_II}, holding register 1087",
-        profiles=STORAGE_1000_BLOCK,
-        encoding=Encoding.HHMM,
-        icon="mdi:clock-end",
-    ),
-    WritableRegister(
-        key="grid_first_enabled_3",
-        register=1088,
-        kind=WriteKind.SWITCH,
-        confidence=Confidence.VERIFIED,
-        source=f"{_SPEC_II}, holding register 1088",
-        profiles=STORAGE_1000_BLOCK,
-        encoding=Encoding.BOOL,
-        icon="mdi:transmission-tower",
-    ),
-    WritableRegister(
         key="battery_first_charge_power_rate",
         register=1090,
         kind=WriteKind.NUMBER,
@@ -312,96 +354,12 @@ WRITABLE: tuple[WritableRegister, ...] = (
         unit="%",
         icon="mdi:battery-charging-100",
     ),
-    WritableRegister(
-        key="battery_first_start_time",
-        register=1100,
-        kind=WriteKind.TIME,
-        confidence=Confidence.VERIFIED,
-        source=f"{_SPEC_II}, holding register 1100",
-        profiles=STORAGE_1000_BLOCK,
-        encoding=Encoding.HHMM,
-        icon="mdi:clock-start",
-    ),
-    WritableRegister(
-        key="battery_first_stop_time",
-        register=1101,
-        kind=WriteKind.TIME,
-        confidence=Confidence.VERIFIED,
-        source=f"{_SPEC_II}, holding register 1101",
-        profiles=STORAGE_1000_BLOCK,
-        encoding=Encoding.HHMM,
-        icon="mdi:clock-end",
-    ),
-    WritableRegister(
-        key="battery_first_enabled",
-        register=1102,
-        kind=WriteKind.SWITCH,
-        confidence=Confidence.VERIFIED,
-        source=f"{_SPEC_II}, holding register 1102",
-        profiles=STORAGE_1000_BLOCK,
-        encoding=Encoding.BOOL,
-        icon="mdi:battery-clock",
-    ),
-    WritableRegister(
-        key="battery_first_start_time_2",
-        register=1103,
-        kind=WriteKind.TIME,
-        confidence=Confidence.VERIFIED,
-        source=f"{_SPEC_II}, holding register 1103",
-        profiles=STORAGE_1000_BLOCK,
-        encoding=Encoding.HHMM,
-        icon="mdi:clock-start",
-    ),
-    WritableRegister(
-        key="battery_first_stop_time_2",
-        register=1104,
-        kind=WriteKind.TIME,
-        confidence=Confidence.VERIFIED,
-        source=f"{_SPEC_II}, holding register 1104",
-        profiles=STORAGE_1000_BLOCK,
-        encoding=Encoding.HHMM,
-        icon="mdi:clock-end",
-    ),
-    WritableRegister(
-        key="battery_first_enabled_2",
-        register=1105,
-        kind=WriteKind.SWITCH,
-        confidence=Confidence.VERIFIED,
-        source=f"{_SPEC_II}, holding register 1105",
-        profiles=STORAGE_1000_BLOCK,
-        encoding=Encoding.BOOL,
-        icon="mdi:battery-clock",
-    ),
-    WritableRegister(
-        key="battery_first_start_time_3",
-        register=1106,
-        kind=WriteKind.TIME,
-        confidence=Confidence.VERIFIED,
-        source=f"{_SPEC_II}, holding register 1106",
-        profiles=STORAGE_1000_BLOCK,
-        encoding=Encoding.HHMM,
-        icon="mdi:clock-start",
-    ),
-    WritableRegister(
-        key="battery_first_stop_time_3",
-        register=1107,
-        kind=WriteKind.TIME,
-        confidence=Confidence.VERIFIED,
-        source=f"{_SPEC_II}, holding register 1107",
-        profiles=STORAGE_1000_BLOCK,
-        encoding=Encoding.HHMM,
-        icon="mdi:clock-end",
-    ),
-    WritableRegister(
-        key="battery_first_enabled_3",
-        register=1108,
-        kind=WriteKind.SWITCH,
-        confidence=Confidence.VERIFIED,
-        source=f"{_SPEC_II}, holding register 1108",
-        profiles=STORAGE_1000_BLOCK,
-        encoding=Encoding.BOOL,
-        icon="mdi:battery-clock",
-    ),
+    # ---- Charge and discharge windows -----------------------------------------------
+    # Generated from TIME_SLOTS, so a window is declared once rather than as three
+    # entries here plus a separate list of which registers form one. Two sources for one
+    # fact is how a slot ends up half declared -- and a slot the writer fails to
+    # recognise silently loses its atomicity, which is the whole point of declaring it.
+    *(entry for slot in TIME_SLOTS for entry in slot.entries()),
     # ---- The 3000 block -------------------------------------------------------------
     # Everything above addresses the SPH/SPA storage block. A TL-XH hybrid keeps its
     # settings elsewhere, and 3049 is the one address that is settled: the same register
@@ -435,37 +393,12 @@ WRITABLE: tuple[WritableRegister, ...] = (
     ),
 )
 
-#: The SPH/SPA time slots, as ``(start, stop, enable)`` triples of holding registers.
-#:
-#: Firmware validates a slot as a whole, not a register at a time. A window written one
-#: register at a time passes through a moment where the start is the new value and the
-#: stop is still the old one -- an inverted or overlapping window that some firmware
-#: rejects outright and some acts on. And enabling a slot whose window is still
-#: 00:00-00:00 is refused, which only makes sense once you see that the three registers
-#: are one setting. Sending them as a single 0x10 range is what Growatt's own app does.
-TIME_SEGMENTS: tuple[tuple[int, int, int], ...] = (
-    (1080, 1081, 1082),
-    (1083, 1084, 1085),
-    (1086, 1087, 1088),
-    (1100, 1101, 1102),
-    (1103, 1104, 1105),
-    (1106, 1107, 1108),
-)
-
-
-def segment_for(register: int) -> tuple[int, int, int] | None:
-    """The time slot ``register`` is part of, or ``None`` if it stands alone."""
-    for segment in TIME_SEGMENTS:
-        if register in segment:
-            return segment
-    return None
-
 
 def for_profile(profile_key: str, *, include_unverified: bool = False) -> list[WritableRegister]:
     """Writable registers applicable to ``profile_key``."""
     return [
         entry
         for entry in WRITABLE
-        if (not entry.profiles or profile_key in entry.profiles)
+        if profile_key in entry.profiles
         and (include_unverified or entry.confidence is Confidence.VERIFIED)
     ]

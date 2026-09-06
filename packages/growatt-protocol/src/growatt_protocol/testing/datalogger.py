@@ -13,7 +13,7 @@ import contextlib
 from datetime import datetime
 
 from ..framing import Framer
-from ..records import Frame
+from ..records import Frame, serial_width
 from .frames import build_data_record, build_frame, build_group
 
 
@@ -107,7 +107,7 @@ class FakeDatalogger:
 
     async def send_ping(self) -> bytes:
         body = (
-            self.datalogger_serial.encode().ljust(30 if self.protocol == 6 else 10, b"\x00")
+            self.datalogger_serial.encode().ljust(serial_width(self.protocol), b"\x00")
             + b"\x00\x00"
         )
         frame = build_frame(

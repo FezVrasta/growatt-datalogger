@@ -41,11 +41,27 @@ PROTOCOL_II_3000 = Profile.compose(
     holding_tables=[protocol_ii.HOLDING_REGISTERS],
 )
 
+#: The part of the storage holding overlay that addresses the 3000 block.
+#:
+#: ``storage.HOLDING_REGISTERS`` is generated from an upstream table that has one storage
+#: device type and so does not distinguish the two storage families, but the families do
+#: not agree: AC charge enable is holding 3049 on a TL-XH and holding 1092 on an SPH.
+#: Applying the whole overlay to both left the read side saying 3049 and the write side
+#: saying 1092 *for the same profile*, unchecked -- and an entity prefers what the device
+#: reported, so it would have displayed one register while writing another.
+#:
+#: The split is made here rather than in the generated file because it is this project's
+#: knowledge, not upstream's, and because composition decisions already live here.
+STORAGE_HOLDING_3000 = tuple(spec for spec in storage.HOLDING_REGISTERS if spec.register >= 3000)
+STORAGE_HOLDING_SHARED = tuple(spec for spec in storage.HOLDING_REGISTERS if spec.register < 3000)
+
 STORAGE_1000 = Profile.compose(
     "storage_1000",
     "Storage on the 0-based block with a 1000 battery overlay (SPH, SPA, MIX)",
     input_tables=[protocol_ii.INPUT_REGISTERS, storage.INPUT_REGISTERS_1000],
-    holding_tables=[protocol_ii.HOLDING_REGISTERS, storage.HOLDING_REGISTERS],
+    # No 3000-block overlay: an SPH cannot report those registers, so all it did was
+    # contradict the writable table. Its serial comes from Protocol II holding 23.
+    holding_tables=[protocol_ii.HOLDING_REGISTERS, STORAGE_HOLDING_SHARED],
 )
 
 STORAGE_3000 = Profile.compose(

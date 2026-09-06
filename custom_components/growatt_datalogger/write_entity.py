@@ -17,36 +17,76 @@ before it is reported, so the message can say whether the inverter has the regis
 all rather than quoting a status byte at someone.
 
 Charge and discharge windows are the exception to "one entity, one register": firmware
-validates a whole slot, so all three of its registers go out together. See
-:data:`~growatt_protocol.registers.writable.TIME_SEGMENTS`.
+validates a whole slot, so all three of its registers go out together. How that is done
+lives in :mod:`growatt_protocol.settings`, next to
+:class:`~growatt_protocol.registers.writable.TimeSlot`, rather than here -- writing a
+register safely is not a property of being a Home Assistant entity.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from typing import Any
 
-from growatt_protocol import CommandTimeout, commands
+from growatt_protocol import CommandTimeout, commands, settings
 from growatt_protocol.registers.writable import (
     Encoding,
     WritableRegister,
     WriteKind,
     for_profile,
-    segment_for,
 )
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import KIND_INVERTER, SIGNAL_NEW_DEVICE
-from .entity import GrowattEntity
+from .const import KIND_INVERTER
+from .entity import GrowattEntity, async_on_new_device
 from .hub import GrowattDevice, GrowattHub
 from .metadata import pretty
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class HoldingReader:
+    """One coalesced read of a device's writable holding registers.
+
+    Every write entity used to issue its own single-register read on the first record
+    after startup. On a storage inverter that is 26 commands, and a session serialises
+    them behind one lock a fixed interval apart -- close to four seconds of enforced
+    pauses on top of 26 round trips to a device fronting a serial Modbus bus, all of it
+    ahead of the first thing a user actually asks for.
+
+    Nothing about that had to be sequential: which registers are wanted is known from the
+    device's profile before any of them is asked for. So they are read together, in as
+    few ranges as the gaps allow, and each entity takes its own word out of the result.
+
+    One shot, like the reads it replaces: a device that will not answer leaves its
+    entities unknown rather than being retried forever. The lock is what makes it one --
+    every entity arrives at the same moment and the first one through does the work.
+    """
+
+    def __init__(self, registers: frozenset[int]) -> None:
+        self.registers = registers
+        self._values: dict[int, int] = {}
+        self._read = False
+        self._lock = asyncio.Lock()
+
+    async def word(self, session: Any, register: int) -> int | None:
+        """``register``'s current word, reading the whole set on the first call."""
+        async with self._lock:
+            if not self._read:
+                self._read = True
+                self._values = await settings.read_registers(session, self.registers)
+                _LOGGER.debug(
+                    "read %s of %s writable registers in %s commands",
+                    len(self._values),
+                    len(self.registers),
+                    len(settings.read_ranges(self.registers)),
+                )
+        return self._values.get(register)
 
 
 def async_setup_write_platform(
@@ -66,8 +106,15 @@ def async_setup_write_platform(
         if device is None or device.kind != KIND_INVERTER or device.profile is None:
             return
 
+        specs = for_profile(device.profile, include_unverified=True)
+        # Every platform runs this; the first one to reach a device sets up the shared
+        # batch its entities will all read from.
+        hub.holding_reads.setdefault(
+            device_key, HoldingReader(frozenset(spec.register for spec in specs))
+        )
+
         entities = []
-        for spec in for_profile(device.profile, include_unverified=True):
+        for spec in specs:
             if spec.kind is not kind:
                 continue
             token = (device_key, spec.key)
@@ -79,10 +126,7 @@ def async_setup_write_platform(
         if entities:
             async_add_entities(entities)
 
-    entry.async_on_unload(
-        async_dispatcher_connect(hass, SIGNAL_NEW_DEVICE.format(entry_id=entry.entry_id), _add)
-    )
-    hub.async_replay(_add)
+    async_on_new_device(hass, entry, _add)
 
 
 class GrowattWriteEntity(GrowattEntity):
@@ -149,13 +193,36 @@ class GrowattWriteEntity(GrowattEntity):
         if not self._refresh_requested and self._reported is None and self._current is None:
             self._refresh_requested = True
             self.hass.async_create_background_task(
-                self._async_refresh(),
+                self._async_first_read(),
                 name=f"growatt read {self.device.serial} {self.spec.key}",
             )
         super()._handle_coordinator_update()
 
+    async def _async_first_read(self) -> None:
+        """Take this register's value from the device's one batched read."""
+        session = self._session()
+        reader = self.hub.holding_reads.get(self.device.key)
+        if session is None or reader is None:
+            return
+
+        word = await reader.word(session, self.spec.register)
+        if word is None:
+            # The device does not implement this register. Better an unknown value than
+            # a plausible-looking wrong one.
+            _LOGGER.debug(
+                "%s does not implement register %s", self.device.serial, self.spec.register
+            )
+            return
+
+        self._current = self.spec.decode(word)
+        self.async_write_ha_state()
+
     async def _async_refresh(self) -> None:
-        """Read the register back. Leaves the value unknown if it cannot be read."""
+        """Read this one register back, to confirm what a write actually did.
+
+        Deliberately not the batch: after a write the caller is waiting, and one
+        register is what changed.
+        """
         session = self._session()
         if session is None:
             return
@@ -191,8 +258,12 @@ class GrowattWriteEntity(GrowattEntity):
         except ValueError as err:
             raise HomeAssistantError(str(err)) from err
 
+        # How a register is written safely -- whole-slot writes, the range-write
+        # fallback, and turning a refusal into something a user can act on -- lives in
+        # growatt_protocol.settings, next to the register table rather than on an entity
+        # class, so the register services get the same behaviour.
         try:
-            response = await self._send_write(session, word)
+            response = await settings.write_register(session, self.spec.register, word)
         except (CommandTimeout, ConnectionError) as err:
             # Deliberately not retried: repeating a write could apply a change twice.
             raise HomeAssistantError(
@@ -201,105 +272,13 @@ class GrowattWriteEntity(GrowattEntity):
             ) from err
 
         if not response.ok:
-            raise HomeAssistantError(await self._explain_rejection(session, response))
+            raise HomeAssistantError(
+                await settings.explain_rejection(
+                    session, self.spec.register, response, name=self.spec.key
+                )
+            )
 
         await self._async_refresh()
-
-    async def _send_write(self, session: Any, word: int) -> Any:
-        """Send the write -- as a whole time slot, where the register belongs to one.
-
-        Growatt firmware validates a charge or discharge window as a unit. Enabling one
-        whose boundaries are still 00:00-00:00 is refused, and setting the boundaries one
-        register at a time passes through a moment where the start has moved and the stop
-        has not, which is an inverted window some firmware refuses and some acts on.
-        Sending the three registers as one 0x10 range never presents a half-changed slot.
-        """
-        single = commands.write_inverter(
-            session.datalogger_serial, session.protocol, self.spec.register, word
-        )
-        segment = segment_for(self.spec.register)
-        if segment is None:
-            return await session.send_command(single)
-
-        values = await self._read_segment(session, segment)
-        if values is None:
-            # Without the slot's current contents there is nothing to send alongside this
-            # value, and inventing the other two would overwrite a window someone set in
-            # the Growatt app. Changing one register is the smaller risk.
-            return await session.send_command(single)
-
-        values[segment.index(self.spec.register)] = word
-        response = await session.send_command(
-            commands.write_inverter_range(
-                session.datalogger_serial, session.protocol, segment[0], values
-            )
-        )
-        if response.result == 1:
-            # "Unsupported operation" -- this firmware has no 0x10. Nothing was written,
-            # so falling back to the single-register write cannot apply anything twice.
-            _LOGGER.debug(
-                "%s does not implement range writes; writing %s on its own",
-                self.device.serial,
-                self.spec.key,
-            )
-            return await session.send_command(single)
-        return response
-
-    async def _read_segment(self, session: Any, segment: tuple[int, ...]) -> list[int] | None:
-        """The slot's current words, or None if the inverter did not return all of them."""
-        try:
-            response = await session.send_command(
-                commands.read_inverter(
-                    session.datalogger_serial, session.protocol, segment[0], segment[-1]
-                )
-            )
-        except (CommandTimeout, ConnectionError) as err:
-            _LOGGER.debug("could not read the time slot at %s: %s", segment[0], err)
-            return None
-
-        if len(response.values) != len(segment):
-            _LOGGER.debug(
-                "%s answered a read of %s..%s with %s words, not %s",
-                self.device.serial,
-                segment[0],
-                segment[-1],
-                len(response.values),
-                len(segment),
-            )
-            return None
-        return list(response.values)
-
-    async def _explain_rejection(self, session: Any, response: Any) -> str:
-        """Say what a rejection means, having asked the inverter about the register.
-
-        A bare status byte leaves someone with nowhere to go -- issue #2 was filed
-        against "result 2" for exactly that reason. One extra read separates the two
-        cases a user would act on differently: a register this model does not have, and
-        one it has but would not accept this change to. It delays an error that has
-        already happened, which is the cheapest thing there is to delay.
-        """
-        message = (
-            f"The inverter rejected {self.spec.key} (holding register "
-            f"{self.spec.register}): {commands.describe_result(response.result)}"
-        )
-        try:
-            probe = await session.send_command(
-                commands.read_inverter(
-                    session.datalogger_serial, session.protocol, self.spec.register
-                )
-            )
-        except (CommandTimeout, ConnectionError):
-            return f"{message}."
-
-        if probe.empty or probe.value is None:
-            return (
-                f"{message}. It does not answer a read of that register either, so this "
-                "model does not have it and retrying will not help."
-            )
-        return (
-            f"{message}. The register itself reads back as {probe.value}, so the "
-            "inverter does have it and refused this particular change."
-        )
 
     def _session(self) -> Any:
         parent = self.device.parent

@@ -40,6 +40,11 @@ async def async_get_config_entry_diagnostics(
         {
             "connection_id": session.connection_id,
             "protocol": session.protocol,
+            # The clock is what a datalogger waits for before it will send anything, so
+            # "announced but no data" and "clock never set" are the same report. The
+            # session has always known; nothing asked it until now.
+            "time_synced": session.time_synced,
+            "inverter": session.inverter_serial,
             "records": session.stats.records,
             "acknowledged": session.stats.acknowledged,
             "pings": session.stats.pings,

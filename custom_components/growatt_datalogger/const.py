@@ -77,7 +77,6 @@ LEARN_MORE_URL: Final = "https://github.com/FezVrasta/growatt-datalogger#trouble
 # entries, which is a real bug in at least one integration that does it this way.
 
 SIGNAL_NEW_DEVICE: Final = f"{DOMAIN}_new_device_{{entry_id}}"
-SIGNAL_NEW_VALUES: Final = f"{DOMAIN}_new_values_{{entry_id}}_{{device_key}}"
 
 # Device keys -----------------------------------------------------------------
 
@@ -113,4 +112,3 @@ VALUE_DECODE_ERRORS: Final = "decode_errors"
 VALUE_CRC_MISMATCHES: Final = "crc_mismatches"
 VALUE_BUFFERED_RECORDS: Final = "buffered_records"
 VALUE_PROFILE: Final = "profile"
-VALUE_RELAY_CONNECTED: Final = "cloud_relay"

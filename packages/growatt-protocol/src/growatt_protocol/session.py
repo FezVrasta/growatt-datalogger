@@ -47,17 +47,29 @@ DEFAULT_COMMAND_TIMEOUT = 8.0
 #: NAKs that would otherwise look like timeouts.
 DEFAULT_COMMAND_INTERVAL = 0.15
 
-#: Attempts for a read. Reads are idempotent, so retrying is free.
-READ_ATTEMPTS = 3
-
 #: Pause between acknowledging an announce and setting the device's clock, matching the
 #: gap a datalogger sees when talking to the vendor's own server.
 DEFAULT_TIME_SYNC_DELAY = 1.0
 
-#: A key identifying an outstanding command. The connection id rather than the serial:
-#: a device that reconnects gets a new id, so a reply from the previous socket can never
-#: satisfy a request made on the new one.
-PendingKey = tuple[int, int, int]  # (connection_id, response function, sequence)
+
+@dataclass(slots=True)
+class _Outstanding:
+    """The one command awaiting a reply.
+
+    One, not a map of them: :meth:`Session.send_command` holds a lock for the whole
+    round trip, so a connection never has more than a single request in flight. What
+    used to be two dictionaries -- one keyed by sequence, one by register, inserted and
+    popped in lockstep -- was two ways of indexing this.
+
+    Per connection rather than per serial: a device that reconnects gets a new
+    :class:`Session`, so a reply arriving on the previous socket can never satisfy a
+    request made on the new one.
+    """
+
+    function: int
+    sequence: int
+    register: int
+    future: asyncio.Future[CommandResponse]
 
 
 @dataclass(slots=True)
@@ -126,6 +138,8 @@ class Session:
 
         self.command_timeout = DEFAULT_COMMAND_TIMEOUT
         self.command_interval = DEFAULT_COMMAND_INTERVAL
+        self._next_send = 0.0
+        """Loop time before which the next command must not go out."""
 
         self.push_time_on_announce = True
         self.time_sync_delay = DEFAULT_TIME_SYNC_DELAY
@@ -133,8 +147,7 @@ class Session:
         self._time_task: asyncio.Task[None] | None = None
 
         self._sequence = 0
-        self._pending: dict[PendingKey, asyncio.Future[CommandResponse]] = {}
-        self._pending_by_register: dict[tuple[int, int, int], asyncio.Future[CommandResponse]] = {}
+        self._outstanding: _Outstanding | None = None
         self._command_lock = asyncio.Lock()
         self._unsolicited: deque[CommandResponse] = deque(maxlen=32)
 
@@ -312,7 +325,7 @@ class Session:
         """
         for _ in range(0xFFFE):
             self._sequence = (self._sequence % 0xFFFD) + 1
-            if not any(key[2] == self._sequence for key in self._pending):
+            if self._outstanding is None or self._outstanding.sequence != self._sequence:
                 return self._sequence
         raise RuntimeError("no free sequence numbers")
 
@@ -331,38 +344,47 @@ class Session:
             raise ConnectionError("the datalogger has not identified itself yet")
 
         async with self._command_lock:
-            response = await self._send_once(command, timeout or self.command_timeout)
-            if self.command_interval:
-                await asyncio.sleep(self.command_interval)
-            return response
+            # The interval is enforced as a deadline before sending, not as a pause
+            # afterwards. The guarantee is the same -- consecutive commands stay
+            # command_interval apart -- but a command that follows nothing waits for
+            # nothing, where sleeping afterwards charged every caller for a gap before a
+            # request that might never come. A user-facing write is read, write, read
+            # back; that was 0.45s of sleep in a person's way, all of it after the work.
+            await self._wait_for_the_interval()
+            try:
+                return await self._send_once(command, timeout or self.command_timeout)
+            finally:
+                self._next_send = asyncio.get_running_loop().time() + self.command_interval
+
+    async def _wait_for_the_interval(self) -> None:
+        if not self.command_interval:
+            return
+        remaining = self._next_send - asyncio.get_running_loop().time()
+        if remaining > 0:
+            await asyncio.sleep(remaining)
 
     async def _send_once(self, command: Command, timeout: float) -> CommandResponse:
         sequence = self._next_sequence()
         loop = asyncio.get_running_loop()
-        future: asyncio.Future[CommandResponse] = loop.create_future()
-
-        key = (self.connection_id, command.response_function, sequence)
-        # It is not established that every firmware echoes the request's sequence, so a
-        # second index on the register number acts as a fallback. Because commands are
-        # serialised, at most one request can match it at a time. The DEBUG line below
-        # fires when the fallback is used; once that is seen (or not) on real hardware,
-        # one of the two indexes can go.
-        register_key = (self.connection_id, command.response_function, command.register)
-        self._pending[key] = future
-        self._pending_by_register[register_key] = future
+        outstanding = _Outstanding(
+            function=command.response_function,
+            sequence=sequence,
+            register=command.register,
+            future=loop.create_future(),
+        )
+        self._outstanding = outstanding
 
         try:
             assert self.protocol is not None
             await self._send(command.build(sequence, self.protocol))
-            return await asyncio.wait_for(future, timeout)
+            return await asyncio.wait_for(outstanding.future, timeout)
         except TimeoutError:
             raise CommandTimeout(
                 f"no reply to {command.function:#04x} for register {command.register} "
                 f"(sequence {sequence})"
             ) from None
         finally:
-            self._pending.pop(key, None)
-            self._pending_by_register.pop(register_key, None)
+            self._outstanding = None
 
     def _handle_command_response(self, frame: Frame) -> None:
         """Match a reply to the command that is waiting for it."""
@@ -377,12 +399,17 @@ class Session:
             )
             return
 
-        future = self._pending.get((self.connection_id, frame.function, frame.sequence))
-        if future is None and response.register is not None:
-            future = self._pending_by_register.get(
-                (self.connection_id, frame.function, response.register)
-            )
-            if future is not None:
+        future = None
+        outstanding = self._outstanding
+        if outstanding is not None and outstanding.function == frame.function:
+            if outstanding.sequence == frame.sequence:
+                future = outstanding.future
+            elif response.register is not None and outstanding.register == response.register:
+                # It is not established that every firmware echoes the request's
+                # sequence, so the register acts as a fallback. Because commands are
+                # serialised there is only ever one candidate, so this cannot mismatch.
+                # This line is how it will be learned whether the fallback is ever used.
+                future = outstanding.future
                 _LOGGER.debug(
                     "connection %s: %#04x reply carried sequence %s, matched on "
                     "register %s instead",
@@ -426,11 +453,9 @@ class Session:
         self.closed = True
         if self._time_task is not None and not self._time_task.done():
             self._time_task.cancel()
-        for future in list(self._pending.values()):
-            if not future.done():
-                future.set_exception(ConnectionError("the datalogger disconnected"))
-        self._pending.clear()
-        self._pending_by_register.clear()
+        if self._outstanding is not None and not self._outstanding.future.done():
+            self._outstanding.future.set_exception(ConnectionError("the datalogger disconnected"))
+        self._outstanding = None
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return (

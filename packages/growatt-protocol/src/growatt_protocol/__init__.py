@@ -25,7 +25,7 @@ without hardware.
 
 from __future__ import annotations
 
-from . import registers, testing
+from . import registers, settings, testing
 from .commands import (
     REGISTER_TIME,
     Command,
@@ -116,6 +116,7 @@ __all__ = [
     "read_inverter",
     "registers",
     "set_time",
+    "settings",
     "testing",
     "write_datalogger",
     "write_inverter",

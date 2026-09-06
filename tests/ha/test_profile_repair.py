@@ -8,8 +8,6 @@ dashboard full of confident nonsense, which is the one thing a user cannot debug
 
 from __future__ import annotations
 
-import asyncio
-
 from growatt_protocol.testing import FakeDatalogger
 from growatt_protocol.testing.frames import build_group
 from homeassistant.core import HomeAssistant
@@ -24,19 +22,14 @@ from custom_components.growatt_datalogger.const import (
     PROFILE_AUTO,
 )
 
+from .conftest import settle
+
 #: What the SPH5000 in issue #1 sends: one 0-based group of 135 registers. Under
 #: Protocol II register 4 is PV1 current; here it is the low word of PV power.
 SPH_GROUP = [build_group(0, [0] * 135)]
 
 #: A well-behaved Protocol II device, whose 0-block ends where the documentation says.
 PROTOCOL_II_GROUP = [build_group(0, [0] * 125)]
-
-
-async def _settle(hass: HomeAssistant, times: int = 3) -> None:
-    """Let the socket handler and the resulting state writes drain."""
-    for _ in range(times):
-        await asyncio.sleep(0.05)
-        await hass.async_block_till_done()
 
 
 def _issue(hass: HomeAssistant, serial: str) -> ir.IssueEntry | None:
@@ -49,7 +42,7 @@ async def test_unidentified_layout_raises_a_repair(
     hass: HomeAssistant, device: FakeDatalogger
 ) -> None:
     await device.send_data(groups=SPH_GROUP)
-    await _settle(hass)
+    await settle(hass)
 
     issue = _issue(hass, device.inverter_serial)
     assert issue is not None
@@ -63,7 +56,7 @@ async def test_recognised_layout_raises_nothing(
 ) -> None:
     """A device we can identify must stay silent. A repair nobody can act on is noise."""
     await device.send_data(groups=PROTOCOL_II_GROUP)
-    await _settle(hass)
+    await settle(hass)
 
     assert _issue(hass, device.inverter_serial) is None
 
@@ -77,7 +70,7 @@ async def test_extended_protocol_ii_raises_nothing(
     put a warning in front of thousands of users whose data is fine.
     """
     await device.send_data(groups=[build_group(0, [0] * 125), build_group(125, [0] * 125)])
-    await _settle(hass)
+    await settle(hass)
 
     assert _issue(hass, device.inverter_serial) is None
 
@@ -87,7 +80,7 @@ async def test_pinning_a_profile_clears_the_repair(
 ) -> None:
     """The whole point of the repair: it has to go away once acted on."""
     await device.send_data(groups=SPH_GROUP)
-    await _settle(hass)
+    await settle(hass)
     assert _issue(hass, device.inverter_serial) is not None
 
     result = await hass.config_entries.options.async_init(setup_integration.entry_id)
@@ -105,14 +98,14 @@ async def test_pinning_a_profile_clears_the_repair(
 
     # Saving options reloads the entry, which drops the socket and re-binds a new port.
     # The datalogger redials in reality; here it has to be redialled explicitly.
-    await _settle(hass)
+    await settle(hass)
     reconnected = FakeDatalogger(
         datalogger_serial=device.datalogger_serial, inverter_serial=device.inverter_serial
     )
     await reconnected.connect("127.0.0.1", setup_integration.runtime_data.port)
     try:
         await reconnected.send_data(groups=SPH_GROUP)
-        await _settle(hass)
+        await settle(hass)
     finally:
         await reconnected.close()
 
@@ -128,7 +121,7 @@ async def test_auto_is_stored_as_no_pin(
     through to inference, which works by accident and reads as a bug forever after.
     """
     await device.send_data(groups=SPH_GROUP)
-    await _settle(hass)
+    await settle(hass)
 
     result = await hass.config_entries.options.async_init(setup_integration.entry_id)
     result = await hass.config_entries.options.async_configure(
@@ -157,7 +150,7 @@ async def test_settings_step_keeps_existing_profile_pins(
 ) -> None:
     """The two steps write the same options dict; neither may clobber the other."""
     await device.send_data(groups=SPH_GROUP)
-    await _settle(hass)
+    await settle(hass)
 
     result = await hass.config_entries.options.async_init(setup_integration.entry_id)
     result = await hass.config_entries.options.async_configure(
@@ -166,12 +159,12 @@ async def test_settings_step_keeps_existing_profile_pins(
     await hass.config_entries.options.async_configure(
         result["flow_id"], {device.inverter_serial: "offgrid"}
     )
-    await _settle(hass)
+    await settle(hass)
 
     # Saving the options reloaded the entry, so the inverter has to announce itself
     # again before the picker has anything to offer.
     await device.send_data(groups=SPH_GROUP)
-    await _settle(hass)
+    await settle(hass)
 
     result = await hass.config_entries.options.async_init(setup_integration.entry_id)
     result = await hass.config_entries.options.async_configure(

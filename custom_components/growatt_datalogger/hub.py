@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from growatt_protocol import GrowattServer, Record, RelayConfig, ServerConfig, Session
 from growatt_protocol.registers import RegisterSpace, decode_registers, resolve_profile
@@ -51,6 +51,9 @@ from .const import (
     VALUE_PROFILE,
     VALUE_RECORDS,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from .write_entity import HoldingReader
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -111,6 +114,11 @@ class GrowattHub:
         self.entry = entry
         self.devices: dict[str, GrowattDevice] = {}
         self.coordinators: dict[str, GrowattCoordinator] = {}
+        #: One batched read of each inverter's writable holding registers, by device key.
+        #: Owned here rather than by a platform because the four write platforms each
+        #: have their own setup closure, and they must share one batch rather than each
+        #: issuing their own. See :class:`~.write_entity.HoldingReader`.
+        self.holding_reads: dict[str, HoldingReader] = {}
         #: Repair state we have already applied, by issue id. Records arrive every few
         #: seconds; without this the issue registry would be rewritten on every one.
         self._issues: dict[str, bool] = {}
@@ -465,8 +473,3 @@ class GrowattHub:
         for key, device in self.devices.items():
             if device.fields:
                 add(key, sorted(device.fields))
-
-    def last_seen(self, key: str) -> datetime | None:
-        data = self.coordinators[key].data or {}
-        value = data.get(VALUE_LAST_RECORD)
-        return value if isinstance(value, datetime) else None

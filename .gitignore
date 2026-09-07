@@ -10,6 +10,12 @@ dist/
 build/
 .DS_Store
 
+# uv writes this whenever anything is run through it. Nothing here installs from a
+# lock file -- CI pip-installs against whichever Home Assistant the Python version
+# resolves to, deliberately, and users get the manifest's pin -- so a committed lock
+# would only pin the one thing this project wants left free.
+uv.lock
+
 # Raw, un-pseudonymised packet captures must never be committed: they contain
 # datalogger and inverter serial numbers. Use tools/capture.py, which redacts
 # them, and commit only the resulting fixtures under tests/fixtures/.

@@ -128,15 +128,22 @@ Write entities take their value from the announce, which already carries those h
 registers — from its raw words, not from the profile's named values, because a profile
 names four holding registers and none of the SPH/SPA storage block. Reading the word is
 what makes that free refresh reach every window and SOC limit rather than two entities.
-A register no announce reports is asked for directly, but only once a record has proved
-the device is connected — reading at entity-add time happens during setup, before any
-datalogger has connected, and as a one-shot would never be retried.
 
-That direct read is a one-shot, so the announce is the only thing here that refreshes: a
-write entity with no announce behind it shows what its register held at startup until the
-integration is reloaded. Where both exist, the newer wins — a read-back taken seconds ago
-beats an announce from the last reconnect, or a freshly written switch would snap back to
-its old value until the datalogger next connects.
+An announce only happens when a datalogger reconnects, though, and it does not carry every
+register a profile makes writable. So the hub asks for the whole set as well: once on the
+first record — entities are added during setup, before any datalogger has connected, so
+there is nothing to talk to until then — and again every five minutes, configurable and
+disableable. Nothing else here would ever notice a setting changing: a window edited in
+ShinePhone, or one the inverter accepted and then discarded, otherwise leaves Home
+Assistant showing something the inverter is not doing, with no way back short of reloading
+the integration. Which is what people were doing. The refresh only ever reads — where the
+two disagree the inverter is right by definition, and a loop that wrote Home Assistant's
+idea of a setting back would fight the app rather than reflect it.
+
+Where an announce, a refresh and a write's read-back disagree, the newest wins. A refresh
+is dated to when it *started*: commands on a connection are serialised, so a write made
+while a refresh is in flight lands after all of that refresh's reads, and dating them to
+their arrival would make pre-write words look newer than the write and undo it on screen.
 
 Those reads are batched. Which registers a device wants is known from its profile before
 any of them is asked for, so they go out as a handful of range reads rather than one
@@ -144,12 +151,21 @@ command each — 27 registers in four commands on a storage inverter, not 27 beh
 that spaces commands out. A range a device cannot answer in full comes back as an echo
 with no values, which would lose every register in it, so such a range is retried one at a
 time: the batch is an optimisation and must never return less than asking singly would.
+On a timer that fallback is also what a family missing a whole block would pay, one
+command per register, forever — so a register that goes unanswered three refreshes running
+is left out until the device reconnects, and the diagnostics dump says which.
 
 One entity is usually one register, with two exceptions. A charge or discharge window is
 three registers — start, stop, enable — that firmware validates as a unit, so all three go
 out as one `0x10` range with the sibling values read back from the inverter first. And a
 rejected write costs one extra read before it is reported, so the message can distinguish
 a register the model does not have from one it has and would not take this value for.
+
+Every write is read back, and all three outcomes are said out loud: applied, accepted and
+then discarded, and unconfirmed. The last one is not the same as success — a datalogger
+hangs up between commands often enough that the confirmation is the part of a write most
+likely to be lost — and reporting nothing would be indistinguishable, to the person who
+pressed the switch, from the inverter having done as it was told.
 Which registers belong to which family matters here: the SPH/SPA storage block at
 1000–1118 does not exist on a 3000-block hybrid, and offering it there produced entities
 whose every write came back "no such register". So every writable register names the

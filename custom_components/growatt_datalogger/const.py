@@ -46,11 +46,33 @@ network; this exists for people who want the app as well.
 CONF_RELAY_HOST: Final = "relay_host"
 CONF_RELAY_PORT: Final = "relay_port"
 
+CONF_SETTINGS_INTERVAL: Final = "settings_interval"
+"""Minutes between re-reads of an inverter's settings registers. 0 turns it off.
+
+A datalogger volunteers the holding space only when it connects, so without this the
+settings shown in Home Assistant are whatever the last announce carried. Anything that
+changes them elsewhere -- someone in ShinePhone, or firmware quietly discarding a change
+it could not act on -- leaves the two disagreeing with nothing to correct them. See
+:data:`SETTINGS_MISSES` for the cost, which is why this is a poll rather than a stream.
+"""
+
 DEFAULT_PORT: Final = 5279
 DEFAULT_INCLUDE_UNKNOWN: Final = False
 DEFAULT_RELAY_ENABLED: Final = False
 DEFAULT_RELAY_HOST: Final = "server.growatt.com"
 DEFAULT_RELAY_PORT: Final = 5279
+DEFAULT_SETTINGS_INTERVAL: Final = 5
+
+#: How many refreshes in a row a register may go unanswered before it is dropped from
+#: them.
+#:
+#: A range read the device does not fully implement comes back empty, and the fallback is
+#: to read every register in it singly -- so a family that lacks a whole block would pay
+#: for the entire block, one command at a time, on every refresh forever. One or two
+#: misses are the ordinary result of a datalogger hanging up mid-read, though, so a single
+#: silence must not be read as "this model does not have it". Cleared whenever a register
+#: does answer, and whenever the device reconnects and announces its holding space afresh.
+SETTINGS_MISSES: Final = 3
 
 # Buffered-record handling ----------------------------------------------------
 
@@ -117,13 +139,18 @@ VALUE_BUFFERED_RECORDS: Final = "buffered_records"
 VALUE_PROFILE: Final = "profile"
 
 VALUE_HOLDING: Final = "holding_registers"
-"""Every holding register the last announce carried, raw, as ``{number: word}``.
+"""The inverter's holding registers, raw, as ``{number: word}``.
 
 The settings a write entity owns live in the holding space, and an announce carries that
 whole space -- so the device volunteers the current value of every one of them on each
 connection. A profile names only a handful of holding registers, though, and none of the
 SPH/SPA storage block, so the named values alone leave those entities with nothing to
 refresh from. Keeping the raw words is what lets them.
+
+Fed from two places, deliberately merged rather than replaced: an announce, which is free
+but only happens when the device reconnects, and the settings refresh, which asks. Both
+are the device reporting its own holding space, so neither is more authoritative than the
+other -- only newer, which is what :data:`VALUE_HOLDING_AT` is for.
 
 Not gated on :data:`CONF_INCLUDE_UNKNOWN`: that option decides whether unnamed registers
 become diagnostic *entities*, and a switch showing the wrong state must not depend on it.
@@ -134,6 +161,11 @@ VALUE_HOLDING_AT: Final = "holding_registers_at"
 
 A write is read back immediately, and the last announce may be hours old. Without knowing
 which is newer, a freshly written switch snaps back to its pre-write value.
+
+A refresh stamps this with the time it *started*, not the time it finished. Commands on a
+connection are serialised, so a write that a user makes while a refresh is in flight lands
+after every one of that refresh's reads -- and dating those reads to when they completed
+would make the older words look like the newer ones and undo the write on screen.
 """
 
 NOT_SENSORS: Final = frozenset({VALUE_HOLDING, VALUE_HOLDING_AT})

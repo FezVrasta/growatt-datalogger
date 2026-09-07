@@ -36,12 +36,14 @@ from .const import (
     CONF_RELAY_ENABLED,
     CONF_RELAY_HOST,
     CONF_RELAY_PORT,
+    CONF_SETTINGS_INTERVAL,
     DEFAULT_BUFFERED_POLICY,
     DEFAULT_INCLUDE_UNKNOWN,
     DEFAULT_PORT,
     DEFAULT_RELAY_ENABLED,
     DEFAULT_RELAY_HOST,
     DEFAULT_RELAY_PORT,
+    DEFAULT_SETTINGS_INTERVAL,
     DOMAIN,
     KIND_INVERTER,
     PROFILE_AUTO,
@@ -185,6 +187,13 @@ class GrowattOptionsFlow(OptionsFlowWithReload):
                         CONF_BUFFERED_POLICY,
                         default=options.get(CONF_BUFFERED_POLICY, DEFAULT_BUFFERED_POLICY),
                     ): vol.In([BUFFERED_EVENT, BUFFERED_IGNORE]),
+                    # Minutes, and zero to turn it off. An upper bound as well as a lower
+                    # one: a refresh a day apart is not a refresh, and someone who wants
+                    # that wants it off.
+                    vol.Required(
+                        CONF_SETTINGS_INTERVAL,
+                        default=options.get(CONF_SETTINGS_INTERVAL, DEFAULT_SETTINGS_INTERVAL),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=0, max=1440)),
                     vol.Required(
                         CONF_RELAY_ENABLED,
                         default=options.get(CONF_RELAY_ENABLED, DEFAULT_RELAY_ENABLED),

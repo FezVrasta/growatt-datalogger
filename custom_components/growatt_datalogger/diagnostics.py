@@ -84,6 +84,19 @@ async def async_get_config_entry_diagnostics(
         for key, coordinator in hub.coordinators.items()
     }
 
+    # Whether the settings on show are being re-read at all, and which registers have
+    # stopped being asked for. A window that never updates looks identical either way from
+    # the outside, and "holding_registers_at" alone does not say which registers that
+    # timestamp covers.
+    interval = hub.settings_interval
+    settings_refresh = {
+        "interval_minutes": None if interval is None else interval.total_seconds() / 60,
+        "unanswered": {
+            key: {str(register): misses for register, misses in sorted(counts.items())}
+            for key, counts in hub.settings_misses.items()
+        },
+    }
+
     return async_redact_data(
         {
             "port": hub.port,
@@ -91,6 +104,7 @@ async def async_get_config_entry_diagnostics(
             "options": dict(entry.options),
             "devices": devices,
             "sessions": sessions,
+            "settings_refresh": settings_refresh,
         },
         TO_REDACT,
     )

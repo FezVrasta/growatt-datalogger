@@ -33,6 +33,7 @@
         "data": {
           "include_unknown": "Expose unrecognised registers",
           "buffered_policy": "Historical records",
+          "settings_interval": "Re-read inverter settings every (minutes)",
           "relay_enabled": "Also forward to the Growatt cloud",
           "relay_host": "Growatt server",
           "relay_port": "Growatt server port"
@@ -40,6 +41,7 @@
         "data_description": {
           "include_unknown": "Creates a disabled diagnostic sensor for every register this integration cannot name. Useful for adding support for a new inverter; noisy otherwise.",
           "buffered_policy": "Records the datalogger replays after an outage carry a past timestamp, so they are never written to live sensors. 'event' fires growatt_datalogger_buffered_record for automations to consume; 'ignore' discards them.",
+          "settings_interval": "How often to ask the inverter what its settings actually are — charge and discharge windows, SOC limits, power limits. Without this they only refresh when the datalogger reconnects, so a change made in ShinePhone, or one the inverter accepted and then discarded, leaves Home Assistant showing something the inverter is not doing. 0 turns it off.",
           "relay_enabled": "Mirrors every packet to Growatt so ShinePhone keeps working. Off by default, because the point of this integration is that nothing has to leave your network. If Growatt becomes unreachable, Home Assistant takes over answering the datalogger so you never lose data.",
           "relay_host": "Only used when forwarding is enabled.",
           "relay_port": "Only used when forwarding is enabled."

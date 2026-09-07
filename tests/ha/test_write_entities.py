@@ -65,11 +65,9 @@ async def test_a_device_reads_its_writable_registers_in_one_batch(
     startup before anything a user asked for could begin.
     """
     async with FakeInverter(device) as inverter:
-        # Two records: the first creates the entities, and they subscribe to the
-        # coordinator after it has already published, so the second is the first update
-        # they see -- and the first moment they know the device is reachable.
-        await device.send_data(groups=STORAGE_1000)
-        await settle(hass)
+        # A record is the first moment the device is known to be reachable: entities are
+        # added during setup, before any datalogger has connected, so the hub waits for
+        # one before asking for anything.
         await device.send_data(groups=STORAGE_1000)
 
         # The batch runs in the background; its last range covers the battery-first
@@ -326,6 +324,30 @@ async def test_a_write_the_inverter_drops_is_reported_rather_than_shown_as_succe
             )
 
         assert hass.states.get(entity_id).state == "off"
+
+
+async def test_a_write_whose_confirmation_never_came_back_is_not_called_a_success(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, device: FakeDatalogger
+) -> None:
+    """Unconfirmed is its own outcome, and it used to be silent.
+
+    A datalogger hangs up between commands often enough that the read-back is the part of
+    a write most likely to be lost -- and saying nothing when it is lost is
+    indistinguishable, to the person who pressed the switch, from the inverter having
+    applied the change.
+    """
+    async with FakeInverter(device, missing={3}) as inverter:
+        assert inverter is not None
+        await device.send_data(groups=PROTOCOL_II_3000)
+        await settle(hass)
+
+        with pytest.raises(HomeAssistantError, match="got no answer"):
+            await hass.services.async_call(
+                "number",
+                "set_value",
+                {"entity_id": entity(hass, "number", "output_power_limit"), "value": 50},
+                blocking=True,
+            )
 
 
 async def test_a_write_is_not_undone_by_an_older_announce(

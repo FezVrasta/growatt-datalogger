@@ -156,6 +156,17 @@ A charge or discharge window's start, its stop and its enable switch go to the i
 **together**, as one operation. Firmware validates a window as a whole, so writing it a
 register at a time can present a start that has moved past a stop that has not.
 
+Every change is read back before it is reported as done, because an inverter will accept a
+value and then quietly drop it — arming a window that is still 00:00–00:00 is the case that
+turns up in practice. So you get an error rather than a switch that says *on* next to an
+inverter that is off.
+
+These settings are also re-read from the inverter every few minutes, so what Home Assistant
+shows is what the inverter is actually doing. Change a charge window in ShinePhone and it
+turns up here; have the inverter reject one and the entity goes back to matching it. Set
+the interval in the integration's options, or to 0 to turn it off — and there is a **Refresh
+settings** button on the inverter device to ask right now.
+
 For anything else, there are services:
 
 ```yaml
@@ -200,6 +211,18 @@ charge schedule lives at registers 1080–1108, and a MOD or MIN TL-XH hybrid do
 those. Any other answer means the register is there and the inverter refused this
 particular change — most often an attempt to enable a window whose start and stop are both
 still 00:00.
+
+**A setting changed here but ShinePhone still shows the old value.** With the cloud relay
+on, Growatt learns your inverter's settings when the datalogger *announces* — which happens
+when it reconnects, not when something changes. So the app can show a charge window that
+was replaced an hour ago, and it will catch up on its own. Home Assistant reads the
+register back after every write and re-reads the whole settings block on a timer, so where
+the two disagree, this one is the one that asked the inverter more recently.
+
+**A setting won't change — "… was accepted, but reading it back got no answer".** The write
+was taken and the confirmation was lost, which happens because a datalogger hangs up
+between commands. It may well have applied. The next settings refresh will show what the
+inverter really holds, or press **Refresh settings** on the inverter device to find out now.
 
 **Values are wildly wrong — a daily yield in the millions, a temperature in the hundreds.**
 Your inverter is being decoded with the wrong register profile. A record normally states

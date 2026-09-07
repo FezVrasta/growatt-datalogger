@@ -6,13 +6,12 @@ announce carries the holding space, so the device volunteers the current value o
 one of these registers each time it connects, and the entity simply reads it from the
 coordinator.
 
-For a register no announce reports, the entity asks for it directly -- but only once a
-record has arrived, because entities are added during setup, before any datalogger has
-connected. Reading at add time talks to nothing, and as a one-shot it would never retry,
-leaving the entity unknown for good. A one-shot is also why the announce matters so much:
-it is the only thing here that refreshes. Without it an entity shows what the register
-held at startup for as long as the integration stays loaded, and "reload the integration
-and the values are right" is what that looks like from outside.
+That leaves an entity with nothing to say about the registers an announce does not carry,
+and -- because a datalogger announces only when it reconnects -- nothing to correct it
+when a setting changes anywhere else. Both are the hub's job rather than an entity's: it
+reads the whole set on the first record and again on a timer, and publishes the words
+where every entity here already looks for them. See
+:meth:`~.hub.GrowattHub.async_refresh_settings`.
 
 A write that the device rejects does not update the state. Optimistic updates would be
 worse than useless here: showing a battery cut-off the inverter never accepted is exactly
@@ -33,7 +32,6 @@ register safely is not a property of being a Home Assistant entity.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Callable
 from datetime import datetime
@@ -59,45 +57,6 @@ from .metadata import pretty
 _LOGGER = logging.getLogger(__name__)
 
 
-class HoldingReader:
-    """One coalesced read of a device's writable holding registers.
-
-    Every write entity used to issue its own single-register read on the first record
-    after startup. On a storage inverter that is 26 commands, and a session serialises
-    them behind one lock a fixed interval apart -- close to four seconds of enforced
-    pauses on top of 26 round trips to a device fronting a serial Modbus bus, all of it
-    ahead of the first thing a user actually asks for.
-
-    Nothing about that had to be sequential: which registers are wanted is known from the
-    device's profile before any of them is asked for. So they are read together, in as
-    few ranges as the gaps allow, and each entity takes its own word out of the result.
-
-    One shot, like the reads it replaces: a device that will not answer leaves its
-    entities unknown rather than being retried forever. The lock is what makes it one --
-    every entity arrives at the same moment and the first one through does the work.
-    """
-
-    def __init__(self, registers: frozenset[int]) -> None:
-        self.registers = registers
-        self._values: dict[int, int] = {}
-        self._read = False
-        self._lock = asyncio.Lock()
-
-    async def word(self, session: Any, register: int) -> int | None:
-        """``register``'s current word, reading the whole set on the first call."""
-        async with self._lock:
-            if not self._read:
-                self._read = True
-                self._values = await settings.read_registers(session, self.registers)
-                _LOGGER.debug(
-                    "read %s of %s writable registers in %s commands",
-                    len(self._values),
-                    len(self.registers),
-                    len(settings.read_ranges(self.registers)),
-                )
-        return self._values.get(register)
-
-
 def async_setup_write_platform(
     hass: HomeAssistant,
     entry: Any,
@@ -116,12 +75,6 @@ def async_setup_write_platform(
             return
 
         specs = for_profile(device.profile, include_unverified=True)
-        # Every platform runs this; the first one to reach a device sets up the shared
-        # batch its entities will all read from.
-        hub.holding_reads.setdefault(
-            device_key, HoldingReader(frozenset(spec.register for spec in specs))
-        )
-
         entities = []
         for spec in specs:
             if spec.kind is not kind:
@@ -151,7 +104,6 @@ class GrowattWriteEntity(GrowattEntity):
         self._attr_entity_registry_enabled_default = spec.enabled_default
         self._current: Any = None
         self._current_at: datetime | None = None
-        self._refresh_requested = False
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -212,44 +164,6 @@ class GrowattWriteEntity(GrowattEntity):
         self._current = value
         self._current_at = dt_util.utcnow()
         self.async_write_ha_state()
-
-    async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
-        # No read here. Entities are added during setup, before any datalogger has
-        # connected, so a read at this point has nothing to talk to and -- being a
-        # one-shot -- would never be retried, leaving the entity unknown for good. The
-        # value comes from the announce instead, and _handle_coordinator_update asks
-        # explicitly only for the registers an announce does not carry.
-        self._refresh_requested = False
-
-    @callback
-    def _handle_coordinator_update(self) -> None:
-        # A record has arrived, so the device is connected and a command can be sent.
-        if not self._refresh_requested and self._reported is None and self._current is None:
-            self._refresh_requested = True
-            self.hass.async_create_background_task(
-                self._async_first_read(),
-                name=f"growatt read {self.device.serial} {self.spec.key}",
-            )
-        super()._handle_coordinator_update()
-
-    async def _async_first_read(self) -> None:
-        """Take this register's value from the device's one batched read."""
-        session = self._session()
-        reader = self.hub.holding_reads.get(self.device.key)
-        if session is None or reader is None:
-            return
-
-        word = await reader.word(session, self.spec.register)
-        if word is None:
-            # The device does not implement this register. Better an unknown value than
-            # a plausible-looking wrong one.
-            _LOGGER.debug(
-                "%s does not implement register %s", self.device.serial, self.spec.register
-            )
-            return
-
-        self._remember(self.spec.decode(word))
 
     async def _async_refresh(self) -> int | None:
         """Read this one register back, to confirm what a write actually did.
@@ -322,7 +236,19 @@ class GrowattWriteEntity(GrowattEntity):
         # dropped leaves someone with a switch that says on and an inverter that is off,
         # which is worse than either an error or a refusal.
         readback = await self._async_refresh()
-        if readback is not None and readback != word:
+        if readback is None:
+            # And a read-back that got no answer confirms nothing either way. Saying
+            # nothing here is the same silence as success, which is the one thing this
+            # must not be: a datalogger hangs up between commands often enough that the
+            # confirmation is the part most likely to be lost, and the write it was
+            # confirming may well have applied.
+            raise HomeAssistantError(
+                f"{self.spec.key} was accepted, but reading holding register "
+                f"{self.spec.register} back to confirm it got no answer, so whether the "
+                "change took effect is unknown. The next settings refresh will show what "
+                "the inverter actually holds; the Refresh settings button asks now."
+            )
+        if readback != word:
             raise HomeAssistantError(
                 f"The inverter accepted {self.spec.key} but holding register "
                 f"{self.spec.register} still reads back as {readback}, not {word}. The "
@@ -332,7 +258,4 @@ class GrowattWriteEntity(GrowattEntity):
             )
 
     def _session(self) -> Any:
-        parent = self.device.parent
-        if parent is None:
-            return None
-        return self.hub.session_for(self.hub.devices[parent].serial)
+        return self.hub.session_for_device(self.device)

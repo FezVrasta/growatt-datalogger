@@ -7,17 +7,29 @@ empty every solar dashboard until sunrise.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from datetime import datetime, timedelta
+from typing import Any
 
-from growatt_protocol import GrowattServer, Record, RelayConfig, ServerConfig, Session
+from growatt_protocol import (
+    CommandTimeout,
+    GrowattServer,
+    Record,
+    RelayConfig,
+    ServerConfig,
+    Session,
+    settings,
+)
 from growatt_protocol.registers import RegisterSpace, decode_registers, resolve_profile
+from growatt_protocol.registers.writable import for_profile
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
@@ -30,10 +42,12 @@ from .const import (
     CONF_RELAY_ENABLED,
     CONF_RELAY_HOST,
     CONF_RELAY_PORT,
+    CONF_SETTINGS_INTERVAL,
     DEFAULT_BUFFERED_POLICY,
     DEFAULT_INCLUDE_UNKNOWN,
     DEFAULT_RELAY_HOST,
     DEFAULT_RELAY_PORT,
+    DEFAULT_SETTINGS_INTERVAL,
     DOMAIN,
     EVENT_BUFFERED_RECORD,
     ISSUE_ENCRYPTED_SESSION,
@@ -41,6 +55,7 @@ from .const import (
     KIND_DATALOGGER,
     KIND_INVERTER,
     LEARN_MORE_URL,
+    SETTINGS_MISSES,
     SIGNAL_NEW_DEVICE,
     STORAGE_KEY,
     STORAGE_SAVE_DELAY,
@@ -54,9 +69,6 @@ from .const import (
     VALUE_PROFILE,
     VALUE_RECORDS,
 )
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from .write_entity import HoldingReader
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -117,14 +129,20 @@ class GrowattHub:
         self.entry = entry
         self.devices: dict[str, GrowattDevice] = {}
         self.coordinators: dict[str, GrowattCoordinator] = {}
-        #: One batched read of each inverter's writable holding registers, by device key.
-        #: Owned here rather than by a platform because the four write platforms each
-        #: have their own setup closure, and they must share one batch rather than each
-        #: issuing their own. See :class:`~.write_entity.HoldingReader`.
-        self.holding_reads: dict[str, HoldingReader] = {}
         #: Repair state we have already applied, by issue id. Records arrive every few
         #: seconds; without this the issue registry would be rewritten on every one.
         self._issues: dict[str, bool] = {}
+        #: The settings refresh in flight per inverter, so a refresh slower than the
+        #: interval cannot stack up behind itself.
+        self._settings_tasks: dict[str, asyncio.Task[None]] = {}
+        #: Consecutive refreshes a register has gone unanswered in, per inverter. See
+        #: :data:`~.const.SETTINGS_MISSES`.
+        self._settings_misses: dict[str, dict[int, int]] = {}
+        #: Inverters the initial refresh has already been started for. The periodic one
+        #: covers everything afterwards; this is only about not waiting a whole interval
+        #: for the registers an announce does not carry.
+        self._settings_started: set[str] = set()
+        self._settings_unsub: Callable[[], None] | None = None
         self._store: Store[dict[str, Any]] = Store(
             hass, STORAGE_VERSION, f"{STORAGE_KEY}.{entry.entry_id}"
         )
@@ -158,6 +176,16 @@ class GrowattHub:
     @property
     def buffered_policy(self) -> str:
         return str(self._options.get(CONF_BUFFERED_POLICY, DEFAULT_BUFFERED_POLICY))
+
+    @property
+    def settings_interval(self) -> timedelta | None:
+        """How often to re-read the settings registers, or None if that is turned off."""
+        minutes = self._options.get(CONF_SETTINGS_INTERVAL, DEFAULT_SETTINGS_INTERVAL)
+        try:
+            minutes = int(minutes)
+        except (TypeError, ValueError):
+            minutes = DEFAULT_SETTINGS_INTERVAL
+        return timedelta(minutes=minutes) if minutes > 0 else None
 
     def _profile_override(self, serial: str) -> str | None:
         overrides = self._options.get(CONF_PROFILE_OVERRIDES) or {}
@@ -194,12 +222,37 @@ class GrowattHub:
             return None
         return max(candidates, key=lambda s: (s.last_seen is not None, s.last_seen))
 
+    def session_for_device(self, device: GrowattDevice) -> Session | None:
+        """The connection to talk to ``device`` on, which is its datalogger's.
+
+        An inverter has no connection of its own -- it is behind a datalogger on a serial
+        bus -- so every command addressed to one goes out on its parent's session.
+        """
+        if device.kind == KIND_DATALOGGER:
+            return self.session_for(device.serial)
+        parent = self.devices.get(device.parent) if device.parent else None
+        return None if parent is None else self.session_for(parent.serial)
+
     async def async_start(self) -> None:
         """Restore known devices, then bind. Raises OSError if the port is taken."""
         await self._async_restore()
         await self._server.start()
 
+        if (interval := self.settings_interval) is not None:
+            self._settings_unsub = async_track_time_interval(
+                self.hass,
+                self._async_refresh_every_inverter,
+                interval,
+                name=f"{DOMAIN} settings refresh",
+            )
+
     async def async_stop(self) -> None:
+        if self._settings_unsub is not None:
+            self._settings_unsub()
+            self._settings_unsub = None
+        for task in self._settings_tasks.values():
+            task.cancel()
+        self._settings_tasks.clear()
         await self._server.stop()
 
     async def _async_restore(self) -> None:
@@ -330,6 +383,11 @@ class GrowattHub:
             previous = (self.coordinators[inverter_key].data or {}).get(VALUE_HOLDING) or {}
             values[VALUE_HOLDING] = {**previous, **payload.registers}
             values[VALUE_HOLDING_AT] = values[VALUE_LAST_RECORD]
+            # A fresh connection, and a fresh chance for a register that went quiet. The
+            # silence a refresh gives up on is usually the datalogger hanging up mid-read,
+            # not the model lacking the register, and that is exactly what a reconnect
+            # clears.
+            self._settings_misses.pop(inverter_key, None)
 
         _LOGGER.debug(
             "record fn=%#04x space=%s profile=%s: %d named values, %d unnamed registers",
@@ -371,6 +429,13 @@ class GrowattHub:
         # yet. The datalogger's own stats entities are what bring it into being.
         self._publish_logger_stats(logger_key)
         self._publish(inverter_key, values)
+
+        # The first record is the first moment a command can be sent -- entities are
+        # created during setup, when no datalogger has connected yet -- and an announce
+        # does not carry every register a profile makes writable. Without this the ones it
+        # misses would sit unknown until the first timer tick.
+        if inverter_key not in self._settings_started:
+            self.async_refresh_settings(inverter_key)
 
     @callback
     def _sync_profile_issue(self, device: GrowattDevice) -> None:
@@ -464,6 +529,115 @@ class GrowattHub:
     def _bump(self, key: str, name: str) -> None:
         current = (self.coordinators[key].data or {}).get(name, 0)
         self._publish(key, {name: current + 1})
+
+    # ------------------------------------------------------------------
+    # Settings refresh
+    # ------------------------------------------------------------------
+    #
+    # An announce carries the holding space, so for a long time it was the only refresh
+    # these settings had -- and it only happens when the datalogger reconnects. Anything
+    # that changes a setting elsewhere therefore went unnoticed for as long as the
+    # connection lasted: someone editing a charge window in ShinePhone, or firmware
+    # accepting a change and then discarding it, leaves Home Assistant showing a value the
+    # inverter is not acting on with nothing to correct it. "Reload the integration and
+    # the values are right" is what that looks like from outside, and it is what the
+    # reporter of https://github.com/FezVrasta/growatt-datalogger/issues/2 was doing by
+    # hand. So the same registers are asked for on a timer as well.
+    #
+    # Reading, not writing: a refresh never pushes Home Assistant's idea of a setting back
+    # onto the inverter. Where the two disagree the inverter is right by definition, and a
+    # loop that "corrected" the device would fight the app rather than reflect it.
+
+    @property
+    def settings_misses(self) -> dict[str, dict[int, int]]:
+        """Registers each inverter has left unanswered, and how many times running.
+
+        Exposed for diagnostics: a setting that never updates looks the same whether the
+        register is being asked for and ignored or has stopped being asked for at all,
+        and those have different causes.
+        """
+        return {key: dict(misses) for key, misses in self._settings_misses.items() if misses}
+
+    @callback
+    def _async_refresh_every_inverter(self, _now: datetime) -> None:
+        """Timer tick: refresh each inverter that is in a state to be asked."""
+        for key in list(self.devices):
+            self.async_refresh_settings(key)
+
+    @callback
+    def async_refresh_settings(self, key: str) -> None:
+        """Start a refresh of one inverter's settings registers, if one is possible.
+
+        Silent about every reason not to. A device with no profile, no connection or a
+        refresh already in flight is the ordinary state of things on a timer that runs
+        whether or not the sun is up, and a warning for each would say nothing.
+        """
+        device = self.devices.get(key)
+        if device is None or device.kind != KIND_INVERTER or device.profile is None:
+            return
+        task = self._settings_tasks.get(key)
+        if task is not None and not task.done():
+            return
+        session = self.session_for_device(device)
+        if session is None:
+            return
+
+        self._settings_started.add(key)
+        self._settings_tasks[key] = self.hass.async_create_background_task(
+            self.async_refresh_settings_now(device, session),
+            name=f"growatt settings refresh {device.serial}",
+        )
+
+    def _settings_registers(self, device: GrowattDevice) -> set[int]:
+        """Which registers to ask for, minus the ones this device does not answer."""
+        misses = self._settings_misses.get(device.key, {})
+        return {
+            spec.register
+            for spec in for_profile(device.profile or "", include_unverified=True)
+            if misses.get(spec.register, 0) < SETTINGS_MISSES
+        }
+
+    async def async_refresh_settings_now(self, device: GrowattDevice, session: Session) -> None:
+        """Read a device's settings registers and publish them as the device's own.
+
+        Awaitable, unlike :meth:`async_refresh_settings`, so that a button press finishes
+        when the refresh does rather than when it has been scheduled.
+        """
+        wanted = self._settings_registers(device)
+        if not wanted:
+            return
+
+        # Stamped before the reads rather than after them. See VALUE_HOLDING_AT: commands
+        # are serialised, so a write made while this is in flight lands after every read
+        # here, and dating these words to when they arrived would make them look newer
+        # than the write and undo it on screen.
+        at = dt_util.utcnow()
+        try:
+            words = await settings.read_registers(session, wanted)
+        except (CommandTimeout, ConnectionError, ValueError) as error:
+            _LOGGER.debug("could not refresh %s settings: %s", device.serial, error)
+            return
+
+        misses = self._settings_misses.setdefault(device.key, {})
+        for register in wanted:
+            if register in words:
+                misses.pop(register, None)
+            else:
+                misses[register] = misses.get(register, 0) + 1
+                if misses[register] == SETTINGS_MISSES:
+                    _LOGGER.debug(
+                        "%s has not answered holding register %s in %s refreshes; "
+                        "leaving it out until the device reconnects",
+                        device.serial,
+                        register,
+                        SETTINGS_MISSES,
+                    )
+
+        if not words:
+            return
+        _LOGGER.debug("refreshed %s of %s settings registers", len(words), len(wanted))
+        previous = (self.coordinators[device.key].data or {}).get(VALUE_HOLDING) or {}
+        self._publish(device.key, {VALUE_HOLDING: {**previous, **words}, VALUE_HOLDING_AT: at})
 
     # ------------------------------------------------------------------
     # Devices and entities

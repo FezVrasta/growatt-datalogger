@@ -31,6 +31,11 @@ _SERIAL_RE = re.compile(rb"[A-Z0-9]{8,16}")
 #: rewrite register values that happen to look like ASCII.
 _SEARCH_WINDOW = 80
 
+# Functions whose body carries negotiated key material after the serial. Their payload is
+# the whole point of a capture from an encrypted-session datalogger, so it is left intact
+# and only the serial field itself is replaced (see :func:`redact`).
+_KEY_EXCHANGE_FUNCTIONS = frozenset({0x41})
+
 #: How much of the *serial field* must be printable or NUL before a view is treated as
 #: plaintext. Judged there rather than over the whole window, which also holds register
 #: values and timestamps: a serial padded with NULs is entirely readable, ciphertext is
@@ -110,7 +115,16 @@ def redact(frame: bytes, pseudonymiser: Pseudonymiser) -> bytes:
         if not _looks_like_text(bytes(plain[8 : min(end, 8 + width)])):
             continue
         window = bytes(plain[8 : min(end, 8 + _SEARCH_WINDOW)])
-        for match in _SERIAL_RE.finditer(window):
+        matches = list(_SERIAL_RE.finditer(window))
+        # A handshake body is the serial followed by key material, and that key material is
+        # uppercase hex -- indistinguishable from a serial to _SERIAL_RE. Rewriting it
+        # destroys the only part of the frame such a capture exists to show, so on these
+        # functions replace just the serial that leads the body and leave the rest alone.
+        # (The padded serial *width* is no help here: protocol 06 pads to 30 in a data
+        # record, which on a handshake reaches into the password.)
+        if frame[7] in _KEY_EXCHANGE_FUNCTIONS:
+            matches = [m for m in matches[:1] if m.start() == 0]
+        for match in matches:
             start = 8 + match.start()
             plain[start : start + len(match.group())] = pseudonymiser.replace(match.group())
         if not is_view_obfuscated:

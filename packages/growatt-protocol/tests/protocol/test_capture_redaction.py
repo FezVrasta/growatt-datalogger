@@ -94,7 +94,7 @@ def test_a_plaintext_frame_on_an_obfuscated_protocol_is_not_scrambled() -> None:
     run turns up often enough; rewriting one corrupted the only frame that explained the
     capture. See https://github.com/FezVrasta/growatt-datalogger/issues/3.
     """
-    body = b"Password&*20240730" + bytes(60)
+    body = LOGGER_SERIAL.encode() + b"mp" + b"Password&*20240730" + bytes(60)
     # Built by hand: build_frame obfuscates, and the whole point is a frame that
     # declares protocol 06 and is not obfuscated.
     header = b"\x00\x01\x00\x06" + (2 + len(body)).to_bytes(2, "big") + b"\x01\x41"
@@ -105,8 +105,13 @@ def test_a_plaintext_frame_on_an_obfuscated_protocol_is_not_scrambled() -> None:
     # Edited in the view it is actually written in, so it stays readable...
     assert b"Password&*" in clean
     assert len(clean) == len(frame)
-    # ...and the one thing in it shaped like a serial is still replaced.
-    assert b"20240730" not in clean
+    # ...the serial, which is the per-unit identity, is still replaced...
+    assert LOGGER_SERIAL.encode() not in clean
+    # ...but the handshake payload is not. It was previously replaced too, for looking
+    # like a serial; it is a firmware-dated constant shared by every unit on this
+    # firmware, so replacing it protected nobody and left the capture unable to show the
+    # key exchange it was taken to show.
+    assert b"Password&*20240730" in clean
 
 
 def test_an_encrypted_body_is_passed_through_untouched() -> None:
@@ -115,3 +120,43 @@ def test_an_encrypted_body_is_passed_through_untouched() -> None:
     frame = append_crc(b"\x00\x01\x00\x06\x00\x42\x01\x04" + ciphertext)
 
     assert redact(frame, Pseudonymiser()) == frame
+
+
+# --- key-exchange frames -----------------------------------------------------------
+#
+# A datalogger that negotiates an encrypted session sends its key material in the clear in
+# the handshake, after the serial. That payload is the entire reason such a capture is
+# worth asking for, and it is uppercase hex -- so the serial pattern matches it too.
+
+_HANDSHAKE_PASSWORD = b"Password&*20240730"
+_SERVER_KEY = b"E6E8D1BE0B238DBE96623062B4A1C7F0"
+
+
+def _handshake(serial: bytes = LOGGER_SERIAL.encode()) -> bytes:
+    """A plaintext protocol-06 function 0x41 frame, shaped like a real ShineWiFi-X one."""
+    body = serial + b"mp" + _HANDSHAKE_PASSWORD + _SERVER_KEY
+    header = (
+        (1).to_bytes(2, "big")
+        + (6).to_bytes(2, "big")
+        + (len(body) + 2).to_bytes(2, "big")
+        + bytes([1, 0x41])
+    )
+    return header + body
+
+
+def test_handshake_serial_is_still_redacted() -> None:
+    clean = redact(_handshake(), Pseudonymiser())
+
+    assert LOGGER_SERIAL.encode() not in clean
+
+
+def test_handshake_key_material_survives_redaction() -> None:
+    """Redacting the key material makes the capture useless for the one thing it shows."""
+    clean = redact(_handshake(), Pseudonymiser())
+
+    assert _SERVER_KEY in clean
+    assert _HANDSHAKE_PASSWORD in clean
+
+
+def test_handshake_redaction_keeps_the_body_length() -> None:
+    assert len(redact(_handshake(), Pseudonymiser())) == len(_handshake())

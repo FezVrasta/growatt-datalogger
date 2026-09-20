@@ -7,17 +7,21 @@ the bare status byte that https://github.com/FezVrasta/growatt-datalogger/issues
 filed about. So it lives next to the register table instead, where both callers can
 reach it.
 
-Two things happen here that a plain ``send_command`` does not do:
+Three things happen here that a plain ``send_command`` does not do:
 
 * A charge or discharge window is written as a whole slot. Firmware validates the three
   registers as a unit, so changing one at a time can present an inverted window.
 * A rejection is diagnosed rather than reported. One extra read separates "this model
   does not have that register" from "it has it and would not take this value", which are
   the two situations a user acts on differently.
+* A write is read back, and the read is repeated if the inverter is still busy applying
+  it. Acceptance is not application, and the confirmation is the part of a write most
+  likely to be lost.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Iterable
 from typing import Protocol
@@ -44,7 +48,9 @@ class CommandChannel(Protocol):
     datalogger_serial: str | None
     protocol: int | None
 
-    async def send_command(self, command: commands.Command) -> CommandResponse: ...
+    async def send_command(
+        self, command: commands.Command, *, timeout: float | None = None
+    ) -> CommandResponse: ...
 
 
 async def write_register(
@@ -164,6 +170,79 @@ async def read_slot(channel: CommandChannel, slot: TimeSlot) -> list[int] | None
         _LOGGER.debug("could not read the whole window at %s", slot.start)
         return None
     return [words[register] for register in slot.registers]
+
+
+#: When to ask what a register holds after writing it, in seconds from the write.
+#:
+#: Not once, and not immediately. Committing a holding register is a flash write on the
+#: inverter, and while it is in progress the datalogger has nothing to answer a read
+#: with -- not a "busy", nothing at all, until whatever timeout the caller gave up after.
+#: On the SPA in https://github.com/FezVrasta/growatt-datalogger/issues/2 that was every
+#: confirmation, which turned writes that had worked into "whether the change took effect
+#: is unknown".
+#:
+#: The first attempt stays immediate, because on a device that answers it costs nothing
+#: and a person is waiting. The rest back off.
+READBACK_DELAYS: tuple[float, ...] = (0.0, 1.5, 4.0)
+
+#: Seconds to allow each of those attempts.
+#:
+#: Shorter than the session default on purpose. A device that is going to answer answers
+#: in well under a second, so a long wait here buys nothing but a longer spinner, and the
+#: budget is better spent asking again once the inverter has finished writing.
+READBACK_TIMEOUT = 3.0
+
+
+async def read_back(
+    channel: CommandChannel,
+    register: int,
+    *,
+    delays: tuple[float, ...] | None = None,
+    timeout: float | None = None,
+) -> int | None:
+    """What ``register`` holds now, asked for more than once if the device stays quiet.
+
+    Returns None only if the device never answered, or answered that it has no such
+    register. Either way the caller cannot say what the write did -- but it must not say
+    nothing, because silence reads exactly like success.
+
+    Deliberately a read rather than a retried write: asking twice is free, and writing
+    twice could apply a change twice.
+
+    The schedule is read from the module at each call rather than bound as a default, so
+    that changing :data:`READBACK_DELAYS` changes what every caller does.
+    """
+    timeout = READBACK_TIMEOUT if timeout is None else timeout
+    for attempt, delay in enumerate(READBACK_DELAYS if delays is None else delays):
+        if delay:
+            await asyncio.sleep(delay)
+        serial, protocol = _address(channel)
+        try:
+            response = await channel.send_command(
+                commands.read_inverter(serial, protocol, register), timeout=timeout
+            )
+        except CommandTimeout as error:
+            _LOGGER.debug(
+                "no answer on attempt %s reading register %s back: %s", attempt + 1, register, error
+            )
+            continue
+        except ConnectionError as error:
+            # The connection is gone rather than the device busy. Waiting out the rest
+            # of the schedule would only make the caller wait for a socket that will not
+            # come back before the datalogger reconnects with a session of its own.
+            _LOGGER.debug(
+                "connection lost before register %s could be read back: %s", register, error
+            )
+            return None
+
+        if response.empty or response.value is None:
+            # The device answered, and answered that it has no such register. Asking a
+            # second time gets the same answer more slowly.
+            _LOGGER.debug("register %s is not implemented by this device", register)
+            return None
+        return int(response.value)
+
+    return None
 
 
 async def explain_rejection(

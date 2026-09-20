@@ -15,7 +15,11 @@ from growatt_protocol.server import (
 )
 from growatt_protocol.session import Session
 from growatt_protocol.testing import FakeDatalogger
-from growatt_protocol.testing.frames import build_command_response, build_read_response
+from growatt_protocol.testing.frames import (
+    build_command_response,
+    build_range_write_response,
+    build_read_response,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -133,7 +137,7 @@ async def test_a_reply_for_another_register_is_refused_even_on_our_sequence(
     with pytest.raises(CommandTimeout):
         await task
     # And it is kept, so a diagnostics dump can show that something else is talking.
-    assert [r.register for r in session.unsolicited] == [1044]
+    assert [e.response.register for e in session.unsolicited] == [1044]
 
 
 async def test_a_reply_nobody_awaits_is_recorded_not_dropped(make_session: MakeSession) -> None:
@@ -141,7 +145,43 @@ async def test_a_reply_nobody_awaits_is_recorded_not_dropped(make_session: MakeS
     await session.handle_frame(reply(0x05, 99, b"\x00\x05", sequence=1))
 
     assert len(session.unsolicited) == 1
-    assert session.unsolicited[0].register == 99
+    assert session.unsolicited[0].response.register == 99
+
+
+async def test_somebody_elses_range_write_is_reported_against_every_register_it_covered(
+    make_session: MakeSession,
+) -> None:
+    """Growatt writes a charge window as one 0x10, and the start alone does not say
+    whose setting it landed on.
+
+    Which matters at exactly one moment: a write here that was accepted and then read
+    back as the value it had before. Firmware discarding a value and the cloud putting
+    the old one back look identical from the register, and are nothing alike to fix.
+    """
+    session, _, _ = make_session(identified=True)
+    mark = session.unsolicited_mark
+
+    await session.handle_frame(
+        Frame(build_range_write_response(SERIAL, start=1100, end=1108, sequence=1))
+    )
+
+    assert session.written_elsewhere(1103, since=mark)
+    assert not session.written_elsewhere(1090, since=mark)
+    # And not counted against a caller that started watching afterwards.
+    assert not session.written_elsewhere(1103, since=session.unsolicited_mark)
+
+
+async def test_somebody_elses_read_is_not_mistaken_for_a_write(
+    make_session: MakeSession,
+) -> None:
+    """The cloud reads this datalogger's own parameters constantly. None of that can
+    move an inverter register, so none of it should be offered as an explanation."""
+    session, _, _ = make_session(identified=True)
+    mark = session.unsolicited_mark
+
+    await session.handle_frame(reply(0x05, 1103, b"\x0b\x0b", sequence=1))
+
+    assert not session.written_elsewhere(1103, since=mark)
 
 
 async def test_a_command_that_is_never_answered_times_out(make_session: MakeSession) -> None:

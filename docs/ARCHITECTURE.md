@@ -162,10 +162,31 @@ rejected write costs one extra read before it is reported, so the message can di
 a register the model does not have from one it has and would not take this value for.
 
 Every write is read back, and all three outcomes are said out loud: applied, accepted and
-then discarded, and unconfirmed. The last one is not the same as success — a datalogger
-hangs up between commands often enough that the confirmation is the part of a write most
-likely to be lost — and reporting nothing would be indistinguishable, to the person who
-pressed the switch, from the inverter having done as it was told.
+then discarded, and unconfirmed. The last one is not the same as success — and reporting
+nothing would be indistinguishable, to the person who pressed the switch, from the
+inverter having done as it was told.
+
+That read-back is asked for more than once. An inverter committing a holding register
+stops answering for as long as the write takes, rather than saying it is busy, so the read
+that immediately follows a write is precisely the one that goes unanswered — on the SPA in
+issue #2 it was every confirmation, and every successful write reported itself as unknown.
+Three attempts over about six seconds, and if none of them lands the settings block is
+re-read in the background rather than the user being told to press a button.
+
+Two explanations survive an accepted write that reads back unchanged, and they are nothing
+alike to fix: firmware declining to act on a value, and the cloud writing the old one back
+between our write and our read. With the relay on, both servers command the same
+datalogger over the same socket, and a reply to a command nothing here sent is the only
+trace the second one leaves. Those replies are kept with the order they arrived in, so a
+write that appears not to have applied can say whether somebody else wrote to that
+register while it was happening.
+
+Refusing to update the state on a failed write is not the same as correcting the control
+that is already showing the wrong value. The front end moves a control as soon as someone
+moves it and puts it right when a new state arrives; an unchanged state produces no event,
+so a refused write leaves the number the user typed on screen indefinitely. Every path out
+of a write that raises therefore re-announces the state with `force_update`, which is the
+only way to send an event for a state that did not change.
 Which registers belong to which family matters here: the SPH/SPA storage block at
 1000–1118 does not exist on a 3000-block hybrid, and offering it there produced entities
 whose every write came back "no such register". So every writable register names the

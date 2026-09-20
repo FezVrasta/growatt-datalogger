@@ -23,6 +23,13 @@ it -- arming a window that is still 00:00-00:00 is the case that turns up in pra
 and a switch that reports success for a change the inverter dropped is the worst of the
 three outcomes.
 
+Refusing the optimistic update is not the same as putting the control right, and it took
+issue #2 to notice the difference. The front end moves a control the moment someone moves
+it and corrects itself when a new state arrives; a state that did not change produces no
+event, so after a failed write there is nothing to correct it with. Hence
+:meth:`~GrowattWriteEntity._republish`, and hence every path that raises going through
+it.
+
 Charge and discharge windows are the exception to "one entity, one register": firmware
 validates a whole slot, so all three of its registers go out together. How that is done
 lives in :mod:`growatt_protocol.settings`, next to
@@ -37,7 +44,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from growatt_protocol import CommandTimeout, commands, settings
+from growatt_protocol import CommandTimeout, settings
 from growatt_protocol.registers.writable import (
     WritableRegister,
     WriteKind,
@@ -165,6 +172,27 @@ class GrowattWriteEntity(GrowattEntity):
         self._current_at = dt_util.utcnow()
         self.async_write_ha_state()
 
+    @callback
+    def _republish(self) -> None:
+        """Say what this register holds, even though it has not changed.
+
+        For after a write that did not take. The front end sets a control to the value
+        someone typed the moment they type it, and puts it right again when a new state
+        arrives -- but none ever does, because the register still holds exactly what it
+        held, and Home Assistant sends no event for a state that did not change. So the
+        dial stays on a number the inverter never accepted until something else happens
+        to move it, which is what issue #2 describes as the value getting stuck: an error
+        appears, and the control goes on showing the value the error was about.
+
+        ``force_update`` is what makes an unchanged state an event rather than a silent
+        reassertion.
+        """
+        self._attr_force_update = True
+        try:
+            self.async_write_ha_state()
+        finally:
+            self._attr_force_update = False
+
     async def _async_refresh(self) -> int | None:
         """Read this one register back, to confirm what a write actually did.
 
@@ -176,29 +204,29 @@ class GrowattWriteEntity(GrowattEntity):
         session = self._session()
         if session is None:
             return None
-        try:
-            response = await session.send_command(
-                commands.read_inverter(
-                    session.datalogger_serial, session.protocol, self.spec.register
-                )
-            )
-        except (CommandTimeout, ConnectionError) as err:
-            _LOGGER.debug("could not read %s: %s", self.spec.key, err)
-            return None
-
-        if response.empty or response.value is None:
-            # The device does not implement this register. Better an unknown value than
-            # a plausible-looking wrong one.
+        word = await settings.read_back(session, self.spec.register)
+        if word is None:
             _LOGGER.debug(
-                "%s does not implement register %s", self.device.serial, self.spec.register
+                "%s did not answer a read of register %s", self.device.serial, self.spec.register
             )
             return None
 
-        word = int(response.value)
         self._remember(self.spec.decode(word))
         return word
 
     async def _async_write(self, value: Any) -> None:
+        """Write ``value``, and put the entity right if it did not take.
+
+        Every path out of here that raises leaves the front end holding a value the
+        inverter does not have, so every one of them ends at :meth:`_republish`.
+        """
+        try:
+            await self._async_write_and_confirm(value)
+        except HomeAssistantError:
+            self._republish()
+            raise
+
+    async def _async_write_and_confirm(self, value: Any) -> None:
         """Write ``value``, then read the register back to confirm."""
         session = self._session()
         if session is None:
@@ -208,6 +236,12 @@ class GrowattWriteEntity(GrowattEntity):
             word = self.spec.encode(value)
         except ValueError as err:
             raise HomeAssistantError(str(err)) from err
+
+        # Where to start looking for somebody else's writes, should this one appear not
+        # to have applied. Taken before the write rather than after, because the command
+        # that overwrites a register is as likely to be in flight when this one goes out
+        # as to arrive after it.
+        mark = session.unsolicited_mark
 
         # How a register is written safely -- whole-slot writes, the range-write
         # fallback, and turning a refusal into something a user can act on -- lives in
@@ -242,20 +276,50 @@ class GrowattWriteEntity(GrowattEntity):
             # must not be: a datalogger hangs up between commands often enough that the
             # confirmation is the part most likely to be lost, and the write it was
             # confirming may well have applied.
+            #
+            # So the whole block is re-read in the background rather than being left for
+            # the timer. Telling someone to press a button to find out what their
+            # inverter holds is work this can do for them, and by the time they have
+            # read the message it is usually already done.
+            self.hub.async_refresh_settings(self.device.key)
             raise HomeAssistantError(
-                f"{self.spec.key} was accepted, but reading holding register "
-                f"{self.spec.register} back to confirm it got no answer, so whether the "
-                "change took effect is unknown. The next settings refresh will show what "
-                "the inverter actually holds; the Refresh settings button asks now."
+                f"{self.spec.key} was accepted, but the inverter never answered a read of "
+                f"holding register {self.spec.register} to confirm it, so whether the change "
+                "took effect is unknown. These settings are being re-read now, and will "
+                "show what the inverter actually holds."
             )
         if readback != word:
             raise HomeAssistantError(
                 f"The inverter accepted {self.spec.key} but holding register "
                 f"{self.spec.register} still reads back as {readback}, not {word}. The "
-                "change was not applied. Some firmware discards a value it cannot act on "
-                "-- enabling a window that is still 00:00-00:00, for instance -- so check "
-                "whether this setting depends on another one."
+                f"change was not applied. {self._why_unchanged(session, mark)}"
             )
+
+    def _why_unchanged(self, session: Any, since: int) -> str:
+        """Why a register the inverter accepted a write for still reads as it did.
+
+        Two explanations, and from the register alone they are identical. One is firmware
+        declining to act on a value it has no way to use. The other is the relay: with it
+        on, Growatt issues its own commands down the same socket, and a write of theirs
+        landing in the same moment puts the old value back before this read-back asks.
+        The connection is the only thing that knows which, and the remedies are nothing
+        alike, so it should not be left to a user to guess.
+        """
+        others = session.written_elsewhere(self.spec.register, since=since)
+        if not others:
+            return (
+                "Some firmware discards a value it cannot act on -- enabling a window "
+                "that is still 00:00-00:00, for instance -- so check whether this "
+                "setting depends on another one."
+            )
+        return (
+            f"While the change was being made, {len(others)} "
+            f"write{'' if len(others) == 1 else 's'} covering this register arrived on "
+            "this connection that this integration did not ask for. That is the Growatt "
+            "cloud: with the relay on it commands the same datalogger over the same "
+            "connection, and it can put the old value back. Turning the relay off in the "
+            "integration's options would settle whether that is what happened here."
+        )
 
     def _session(self) -> Any:
         return self.hub.session_for_device(self.device)

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from growatt_protocol.testing import FakeDatalogger, FakeInverter, request_register
+from growatt_protocol.testing import FakeDatalogger, FakeInverter
 from growatt_protocol.testing.frames import build_group
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
@@ -25,27 +25,11 @@ from custom_components.growatt_datalogger.const import (
     VALUE_HOLDING_AT,
 )
 
-from .conftest import INVERTER, settle
+from .conftest import INVERTER, quiet, reads_of, settle
 from .test_write_entities import PROTOCOL_II_3000, STORAGE_1000, entity
 
 #: Comfortably past the default five-minute interval.
 LATER = timedelta(minutes=6)
-
-
-async def quiet(hass: HomeAssistant, inverter: FakeInverter) -> None:
-    """Wait until the inverter stops being asked for anything.
-
-    A refresh is several commands a fixed interval apart, so it outlives any single
-    ``settle`` -- and a test that reads an entity while one is still in flight is reading
-    a value that has not arrived yet.
-    """
-    seen = -1
-    for _ in range(20):
-        if seen == len(inverter.requests):
-            return
-        seen = len(inverter.requests)
-        await settle(hass, times=8)
-    raise AssertionError("the device is still being asked for registers")
 
 
 async def tick(
@@ -62,15 +46,6 @@ async def tick(
         await settle(hass, times=1)
         async_fire_time_changed(hass, dt_util.utcnow() + LATER)
         await quiet(hass, inverter)
-
-
-def reads_of(inverter: FakeInverter, register: int) -> int:
-    """How many times ``register`` has been asked for on its own."""
-    return sum(
-        1
-        for request in inverter.requests
-        if request.function == 0x05 and request_register(request) == register
-    )
 
 
 async def test_a_setting_changed_on_the_inverter_reaches_home_assistant(

@@ -68,7 +68,7 @@ from .records import (
 )
 from .relay import RelayConfig, RelayConnection
 from .server import DEFAULT_PORT, GrowattServer, ServerConfig, ServerStats
-from .session import Record, Session, SessionStats
+from .session import Record, Session, SessionStats, Unsolicited
 
 __version__ = "0.1.0"
 
@@ -101,6 +101,7 @@ __all__ = [
     "ServerStats",
     "Session",
     "SessionStats",
+    "Unsolicited",
     "__version__",
     "append_crc",
     "build_ack",

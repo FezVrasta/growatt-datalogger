@@ -6,7 +6,8 @@ import asyncio
 from collections.abc import AsyncIterator, Generator
 
 import pytest
-from growatt_protocol.testing import FakeDatalogger, FakeInverter
+from growatt_protocol import settings
+from growatt_protocol.testing import FakeDatalogger, FakeInverter, request_register
 from homeassistant.const import CONF_PORT
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
@@ -29,6 +30,31 @@ async def settle(hass: HomeAssistant, times: int = 3) -> None:
     for _ in range(times):
         await asyncio.sleep(0.05)
         await hass.async_block_till_done()
+
+
+async def quiet(hass: HomeAssistant, inverter: FakeInverter) -> None:
+    """Wait until the inverter stops being asked for anything.
+
+    A settings refresh is several commands a fixed interval apart, so it outlives any
+    single ``settle`` -- and a test that reads an entity while one is still in flight is
+    reading a value that has not arrived yet.
+    """
+    seen = -1
+    for _ in range(20):
+        if seen == len(inverter.requests):
+            return
+        seen = len(inverter.requests)
+        await settle(hass, times=8)
+    raise AssertionError("the device is still being asked for registers")
+
+
+def reads_of(inverter: FakeInverter, register: int) -> int:
+    """How many reads have started at ``register``."""
+    return sum(
+        1
+        for request in inverter.requests
+        if request.function == 0x05 and request_register(request) == register
+    )
 
 
 def device_entry(hass: HomeAssistant, entry: MockConfigEntry, key: str) -> dr.DeviceEntry:
@@ -60,6 +86,18 @@ def auto_enable_custom_integrations(
 ) -> Generator[None]:
     """Let Home Assistant load this repository's custom_components directory."""
     yield
+
+
+@pytest.fixture(autouse=True)
+def brisk_readbacks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Shrink the schedule a write is confirmed on, without changing its shape.
+
+    The real one is spread over seconds on purpose: an inverter busy committing a write
+    will not answer sooner for being asked sooner. Keeping several attempts with growing
+    gaps, and taking the wall clock out of them, is what makes the retry testable at all.
+    """
+    monkeypatch.setattr(settings, "READBACK_DELAYS", (0.0, 0.01, 0.05))
+    monkeypatch.setattr(settings, "READBACK_TIMEOUT", 1.0)
 
 
 @pytest.fixture

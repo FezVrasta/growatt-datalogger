@@ -61,6 +61,7 @@ class FakeInverter:
         missing: set[int] | None = None,
         discard: set[int] | None = None,
         result: int = 0,
+        deaf_after_write: int = 0,
     ) -> None:
         self.device = device
         self.values = dict(values or {})
@@ -84,6 +85,18 @@ class FakeInverter:
 
         self.result = result
         """The status byte to answer writes with. Zero accepts."""
+
+        self.deaf_after_write = deaf_after_write
+        """How many reads to swallow after each accepted write.
+
+        What a real inverter does while it commits one: it stops answering entirely,
+        rather than replying "busy", for as long as the flash write takes. The
+        confirmation that a write applied is therefore the request most likely to go
+        unanswered -- which is the whole of
+        https://github.com/FezVrasta/growatt-datalogger/issues/2 from v0.9.0 onwards.
+        """
+
+        self._deaf = 0
 
         self.requests: list[Frame] = []
         """Every command seen, in order."""
@@ -142,15 +155,26 @@ class FakeInverter:
                 continue
             self.requests.append(request)
             self._arrived.set()
-            await self.device.send_raw(answer)
+            if answer:
+                await self.device.send_raw(answer)
 
     def _answer(self, request: Frame) -> bytes | None:
+        """The bytes to answer ``request`` with.
+
+        None for a frame that is not this device's business at all, and empty bytes for
+        one that is and is being ignored on purpose -- the difference being that an
+        ignored request still counts as having been seen.
+        """
         serial = self.device.datalogger_serial
         protocol = self.device.protocol
         common = {"protocol": protocol, "sequence": request.sequence}
         register = request_register(request) if len(request.body) >= request.serial_width + 2 else 0
 
         if request.function == 0x05:
+            if self._deaf:
+                # Still writing. A real device says nothing at all here.
+                self._deaf -= 1
+                return b""
             width = request.serial_width
             end = int.from_bytes(request.body[width + 2 : width + 4], "big")
             if self.missing & set(range(register, end + 1)):
@@ -165,6 +189,7 @@ class FakeInverter:
             value = int.from_bytes(request.body[width + 2 : width + 4], "big")
             if self.result == 0 and register not in self.discard:
                 self.values[register] = value
+            self._deaf = self.deaf_after_write
             return build_write_response(
                 serial, register=register, value=value, result=self.result, **common
             )
@@ -176,6 +201,7 @@ class FakeInverter:
                 for offset, value in enumerate(request_values(request)):
                     if register + offset not in self.discard:
                         self.values[register + offset] = value
+            self._deaf = self.deaf_after_write
             return build_range_write_response(
                 serial, start=register, end=end, result=self.result, **common
             )

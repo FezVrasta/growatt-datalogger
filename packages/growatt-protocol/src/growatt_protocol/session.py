@@ -89,6 +89,41 @@ class _Outstanding:
     future: asyncio.Future[CommandResponse]
 
 
+@dataclass(frozen=True, slots=True)
+class Unsolicited:
+    """A reply that arrived with nothing waiting for it, and when it arrived.
+
+    When it arrived is the point of it. On a connection of our own an unsolicited reply
+    is a late answer to something that already timed out; with the cloud relay on it is
+    Growatt commanding the same device down the same socket, and a write of its own
+    landing between our write and the read that confirms it is enough to make a change
+    this server made look as though the inverter had discarded it. Knowing *when*
+    separates those two accounts of the same failure.
+
+    Ordered by a counter rather than by :attr:`at`, because a caller asking "since I
+    started" wants an answer that does not depend on which clock it read, how coarse that
+    clock is, or whether the host adjusted it in between.
+    """
+
+    ordinal: int
+    at: datetime
+    response: CommandResponse
+
+    def covers(self, register: int) -> bool:
+        """Whether this reply answers a command that touched ``register``.
+
+        A 0x10 answers for a whole range, which is how the Growatt cloud writes a charge
+        window: its start alone would not show that it covered the register someone here
+        was changing.
+        """
+        if self.response.register is None:
+            return False
+        end = self.response.end_register
+        if end is None:
+            return self.response.register == register
+        return self.response.register <= register <= end
+
+
 @dataclass(slots=True)
 class SessionStats:
     """Counters worth exposing as diagnostics."""
@@ -182,7 +217,9 @@ class Session:
         self._sequence = SEQUENCE_FLOOR - 1
         self._outstanding: _Outstanding | None = None
         self._command_lock = asyncio.Lock()
-        self._unsolicited: deque[CommandResponse] = deque(maxlen=32)
+        self._unsolicited: deque[Unsolicited] = deque(maxlen=32)
+        self._unsolicited_seen = 0
+        """Every unsolicited reply ever, including the ones the deque has dropped."""
 
     # ------------------------------------------------------------------
     # Frame handling
@@ -503,7 +540,8 @@ class Session:
         if future is None:
             # Nothing is waiting. Either a late reply to a command that already timed
             # out, or -- in relay mode -- a reply to something the cloud asked for.
-            self._unsolicited.append(response)
+            self._unsolicited_seen += 1
+            self._unsolicited.append(Unsolicited(self._unsolicited_seen, self._now(), response))
             _LOGGER.debug(
                 "connection %s: unsolicited %#04x reply for register %s",
                 self.connection_id,
@@ -516,9 +554,31 @@ class Session:
             future.set_result(response)
 
     @property
-    def unsolicited(self) -> tuple[CommandResponse, ...]:
+    def unsolicited(self) -> tuple[Unsolicited, ...]:
         """Recent replies nothing was waiting for, for diagnostics."""
         return tuple(self._unsolicited)
+
+    @property
+    def unsolicited_mark(self) -> int:
+        """A marker for "everything from here on", to pass to :meth:`written_elsewhere`."""
+        return self._unsolicited_seen
+
+    def written_elsewhere(self, register: int, *, since: int) -> tuple[Unsolicited, ...]:
+        """Writes by somebody other than us that covered ``register`` after ``since``.
+
+        Only the relay can produce these: a second server issuing commands on this
+        connection. A caller that has just written a register and read back the value it
+        had before needs this to tell the two possible culprits apart -- firmware that
+        took a value and then discarded it, and the cloud overwriting the register in
+        between -- because the remedy for one is nothing like the remedy for the other.
+        """
+        return tuple(
+            entry
+            for entry in self._unsolicited
+            if entry.ordinal > since
+            and entry.response.function in (Function.INVERTER_WRITE, Function.INVERTER_WRITE_MULTI)
+            and entry.covers(register)
+        )
 
     # ------------------------------------------------------------------
     # Lifecycle

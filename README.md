@@ -219,10 +219,20 @@ was replaced an hour ago, and it will catch up on its own. Home Assistant reads 
 register back after every write and re-reads the whole settings block on a timer, so where
 the two disagree, this one is the one that asked the inverter more recently.
 
-**A setting won't change — "… was accepted, but reading it back got no answer".** The write
-was taken and the confirmation was lost, which happens because a datalogger hangs up
-between commands. It may well have applied. The next settings refresh will show what the
-inverter really holds, or press **Refresh settings** on the inverter device to find out now.
+**A setting won't change — "… was accepted, but the inverter never answered a read of
+holding register N".** The write was taken and the confirmation was lost. An inverter
+committing a holding register stops answering for as long as that takes, so the read that
+confirms a write is the request most likely to land in the gap — it is asked three times
+over about six seconds before giving up. If all three go unanswered, the write may still
+have applied: the whole settings block is re-read immediately, and the entity will show
+whatever the inverter actually holds within a few seconds.
+
+**A setting won't change, and the message mentions the Growatt cloud.** With the relay on,
+Growatt commands the same datalogger down the same connection. A write of theirs landing
+in the same moment as yours puts the old value back before the read-back can see it, which
+from the register alone looks exactly like firmware discarding the change. When that is
+what happened, the error says so. Turning the relay off in the integration's options is
+what settles it.
 
 **Values are wildly wrong — a daily yield in the millions, a temperature in the hundreds.**
 Your inverter is being decoded with the wrong register profile. A record normally states

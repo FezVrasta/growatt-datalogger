@@ -178,7 +178,7 @@ class CommandResponse:
     """A read that returned nothing, which is how a device reports an unknown register."""
 
     end_register: int | None = None
-    """The last register of the range, echoed back by a read."""
+    """The last register of the range, echoed back by a read or a range write."""
 
     values: tuple[int, ...] = ()
     """Every word a range read returned. :attr:`value` is the first of them."""
@@ -273,9 +273,16 @@ def parse_command_response(frame: Frame) -> CommandResponse:
 
     if function == Function.INVERTER_WRITE_MULTI:
         # The register field here is the start of the range; the end follows.
+        #
+        # The end is kept rather than dropped because of what a 0x10 reply means when
+        # nobody here asked for it: with the cloud relay on, it is Growatt writing a run
+        # of registers down the same socket, and the range is the whole of what it says.
+        # A start alone cannot tell you whether that write covered the charge window a
+        # user was in the middle of changing.
         if len(rest) < 3:
             raise RecordError("0x10 response is truncated")
-        return CommandResponse(function, register, result=rest[2])
+        end = int.from_bytes(rest[:2], "big")
+        return CommandResponse(function, register, result=rest[2], end_register=end)
 
     if function == Function.CONFIG_WRITE:
         if not rest:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from growatt_protocol import settings
 from growatt_protocol.commands import Command, CommandResponse
+from growatt_protocol.errors import CommandTimeout
 from growatt_protocol.records import serial_width
 
 SERIAL = "GPG0EXAMP1"
@@ -20,12 +21,16 @@ class FakeChannel:
         *,
         missing: set[int] | None = None,
         result: int = 0,
+        silent_reads: int = 0,
     ) -> None:
         self.datalogger_serial = SERIAL
         self.protocol = 6
         self.values = dict(values or {})
         self.missing = set(missing or ())
         self.result = result
+        self.silent_reads = silent_reads
+        """How many of the next reads to time out, as one busy applying a write does."""
+
         self.commands: list[Command] = []
 
     @property
@@ -40,9 +45,15 @@ class FakeChannel:
             if c.function == 0x05
         ]
 
-    async def send_command(self, command: Command) -> CommandResponse:
+    async def send_command(
+        self, command: Command, *, timeout: float | None = None
+    ) -> CommandResponse:
         self.commands.append(command)
         start = int.from_bytes(command.body[WIDTH : WIDTH + 2], "big")
+
+        if command.function == 0x05 and self.silent_reads:
+            self.silent_reads -= 1
+            raise CommandTimeout(f"no reply for register {start}")
 
         if command.function == 0x05:
             end = int.from_bytes(command.body[WIDTH + 2 : WIDTH + 4], "big")
@@ -190,3 +201,43 @@ async def test_a_rejection_says_so_when_the_register_is_not_there_either() -> No
     message = await settings.explain_rejection(channel, 1082, response)
 
     assert "does not have it" in message
+
+
+# ----------------------------------------------------------------------------------
+# Confirming a write
+# ----------------------------------------------------------------------------------
+
+#: No waiting: the schedule is what is under test, not the clock.
+NOW = (0.0, 0.0, 0.0)
+
+
+@pytest.mark.asyncio
+async def test_a_read_back_asks_again_when_the_inverter_is_still_writing() -> None:
+    """The confirmation is the request most likely to be lost, and it is worth repeating.
+
+    An inverter committing a holding register stops answering for as long as the write
+    takes -- it does not say "busy" -- so the read that follows a write immediately is
+    the one that goes unanswered. Asking once made every successful write on the SPA in
+    https://github.com/FezVrasta/growatt-datalogger/issues/2 report itself as unknown.
+    """
+    channel = FakeChannel({1103: 2828}, silent_reads=2)
+
+    assert await settings.read_back(channel, 1103, delays=NOW) == 2828
+    assert len(channel.commands) == 3
+
+
+@pytest.mark.asyncio
+async def test_a_read_back_gives_up_rather_than_asking_forever() -> None:
+    channel = FakeChannel({1103: 2828}, silent_reads=99)
+
+    assert await settings.read_back(channel, 1103, delays=NOW) is None
+    assert len(channel.commands) == len(NOW)
+
+
+@pytest.mark.asyncio
+async def test_a_register_the_device_does_not_have_is_only_asked_for_once() -> None:
+    """An answer of "no such register" is an answer. Repeating it wastes a user's time."""
+    channel = FakeChannel(missing={1103})
+
+    assert await settings.read_back(channel, 1103, delays=NOW) is None
+    assert len(channel.commands) == 1

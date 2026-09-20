@@ -64,14 +64,20 @@ async def async_get_config_entry_diagnostics(
             # commands down the same socket, and ours are interleaved with them. Which
             # of those is happening changes the diagnosis completely, and nothing else
             # in this dump distinguishes them.
+            #
+            # The range matters as much as the start: Growatt writes a charge window as
+            # one 0x10 over several registers, and a start on its own does not say which
+            # of a user's settings that covered.
             "unsolicited": [
                 {
-                    "function": f"{reply.function:#04x}",
-                    "register": reply.register,
-                    "result": reply.result,
-                    "empty": reply.empty,
+                    "at": entry.at.isoformat(),
+                    "function": f"{entry.response.function:#04x}",
+                    "register": entry.response.register,
+                    "end_register": entry.response.end_register,
+                    "result": entry.response.result,
+                    "empty": entry.response.empty,
                 }
-                for reply in session.unsolicited
+                for entry in session.unsolicited
             ],
         }
         for session in hub.sessions

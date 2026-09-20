@@ -8,18 +8,22 @@ on the wire when someone changes it.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
+from growatt_protocol import Frame, settings
 from growatt_protocol.registers.writable import for_profile
 from growatt_protocol.testing import FakeDatalogger, FakeInverter, request_register, request_values
-from growatt_protocol.testing.frames import build_group
+from growatt_protocol.testing.frames import build_group, build_range_write_response
+from homeassistant.const import EVENT_STATE_CHANGED
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import MockConfigEntry, async_capture_events
 
 from custom_components.growatt_datalogger.const import DOMAIN
 
-from .conftest import INVERTER, SERIAL, settle
+from .conftest import INVERTER, SERIAL, quiet, reads_of, settle
 
 #: A record whose register groups resolve to the Protocol II 3000-block profile.
 PROTOCOL_II_3000 = [build_group(3000, [1, 0, 0, 3295])]
@@ -341,7 +345,7 @@ async def test_a_write_whose_confirmation_never_came_back_is_not_called_a_succes
         await device.send_data(groups=PROTOCOL_II_3000)
         await settle(hass)
 
-        with pytest.raises(HomeAssistantError, match="got no answer"):
+        with pytest.raises(HomeAssistantError, match="never answered a read"):
             await hass.services.async_call(
                 "number",
                 "set_value",
@@ -371,3 +375,129 @@ async def test_a_write_is_not_undone_by_an_older_announce(
         await hass.services.async_call("switch", "turn_on", {"entity_id": entity_id}, blocking=True)
 
         assert hass.states.get(entity_id).state == "on"
+
+
+async def test_a_confirmation_the_inverter_was_too_busy_for_is_asked_for_again(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, device: FakeDatalogger
+) -> None:
+    """A write that worked should not report itself as unknown.
+
+    An inverter committing a holding register stops answering while it does so, and the
+    read that confirms the write is the request that lands in that window. Asking once
+    made every successful write on the SPA in
+    https://github.com/FezVrasta/growatt-datalogger/issues/2 raise "whether the change
+    took effect is unknown" -- an error, on a setting that had in fact changed.
+    """
+    async with FakeInverter(device, {3: 80}, deaf_after_write=1) as inverter:
+        await device.send_data(groups=PROTOCOL_II_3000)
+        await settle(hass)
+
+        entity_id = entity(hass, "number", "output_power_limit")
+        await hass.services.async_call(
+            "number", "set_value", {"entity_id": entity_id, "value": 50}, blocking=True
+        )
+
+        assert inverter.values[3] == 50
+        assert float(hass.states.get(entity_id).state) == 50
+
+
+async def test_a_failed_write_puts_the_control_back_to_what_the_inverter_holds(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, device: FakeDatalogger
+) -> None:
+    """Not updating the state is not the same as correcting the one on screen.
+
+    The front end moves a control as soon as someone moves it and waits for a new state
+    to tell it otherwise. A refused write leaves the register exactly as it was, so the
+    state does not change, so no event is sent, so nothing ever tells it otherwise: the
+    number stays on the value the error was about until something else happens to move
+    it. That is the "value gets stuck" in
+    https://github.com/FezVrasta/growatt-datalogger/issues/2.
+    """
+    async with FakeInverter(device, {3: 80}, discard={3}) as inverter:
+        assert inverter is not None
+        await device.send_data(groups=PROTOCOL_II_3000)
+        await settle(hass)
+
+        entity_id = entity(hass, "number", "output_power_limit")
+        events = async_capture_events(hass, EVENT_STATE_CHANGED)
+
+        with pytest.raises(HomeAssistantError, match="reads back as 80"):
+            await hass.services.async_call(
+                "number", "set_value", {"entity_id": entity_id, "value": 50}, blocking=True
+            )
+
+        assert [e for e in events if e.data["entity_id"] == entity_id], (
+            "the failed write said nothing, so the front end is still showing 50"
+        )
+        assert float(hass.states.get(entity_id).state) == 80
+
+
+async def test_a_write_that_could_not_be_confirmed_re_reads_the_settings(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, device: FakeDatalogger
+) -> None:
+    """ "Unknown" is a state to get out of, not a message to leave someone with.
+
+    The block is re-read straight away rather than at the next five-minute tick, because
+    finding out what the inverter actually holds is work this can do rather than ask for.
+    """
+    async with FakeInverter(device, missing={3}) as inverter:
+        await device.send_data(groups=PROTOCOL_II_3000)
+        await quiet(hass, inverter)
+        before = reads_of(inverter, 0)
+
+        with pytest.raises(HomeAssistantError, match="being re-read now"):
+            await hass.services.async_call(
+                "number",
+                "set_value",
+                {"entity_id": entity(hass, "number", "output_power_limit"), "value": 50},
+                blocking=True,
+            )
+        await quiet(hass, inverter)
+
+        assert reads_of(inverter, 0) > before
+
+
+async def test_a_write_the_cloud_overwrote_says_so(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    device: FakeDatalogger,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two explanations for one symptom, and only one of them is the user's to act on.
+
+    With the relay on, Growatt commands the same datalogger down the same socket. A
+    write of theirs landing between this one and its confirmation puts the old value
+    back, which from the register alone is indistinguishable from firmware discarding a
+    value it cannot act on.
+    """
+    async with FakeInverter(device, dict(BATTERY_FIRST), discard={1103}) as inverter:
+        assert inverter is not None
+        await device.send_data(groups=STORAGE_1000)
+        await settle(hass)
+
+        # What the cloud writing a whole Battery First block looks like from here: a
+        # reply arriving on this connection to a command nothing here sent, in the
+        # moment between our write going out and its confirmation coming back.
+        write_register = settings.write_register
+
+        async def cloud_writes_too(channel: Any, register: int, value: int, **kwargs: Any) -> Any:
+            response = await write_register(channel, register, value, **kwargs)
+            await channel.handle_frame(
+                Frame(build_range_write_response(SERIAL, start=1100, end=1108, sequence=1))
+            )
+            return response
+
+        monkeypatch.setattr(settings, "write_register", cloud_writes_too)
+
+        with pytest.raises(HomeAssistantError, match="Growatt cloud") as raised:
+            await hass.services.async_call(
+                "time",
+                "set_value",
+                {
+                    "entity_id": entity(hass, "time", "battery_first_start_time_2"),
+                    "time": "14:14:00",
+                },
+                blocking=True,
+            )
+
+    assert "1 write covering this register" in str(raised.value)

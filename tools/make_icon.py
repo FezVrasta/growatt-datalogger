@@ -30,6 +30,11 @@ import sys
 from pathlib import Path
 
 SIZE = 1024
+
+#: Apple's app-icon corner, as a fraction of the width, with Figma's equivalent
+#: corner-smoothing value. These two numbers *are* the iOS icon shape; see squircle().
+CORNER_RADIUS_RATIO = 0.2237
+CORNER_SMOOTHING = 0.6
 SCALE = 12.4
 
 STEM = "M262,174C262,174 267.028,171.687 273.739,167.063C280.631,162.313 285,157 285,157"
@@ -65,22 +70,69 @@ def local(px: float) -> float:
     return round(px / SCALE, 3)
 
 
-def squircle(size: float, n: float = 5.0, steps: int = 720) -> str:
-    """An iOS-style superellipse.
+def squircle(size: float) -> str:
+    """Return the iOS app-icon shape as an SVG path, inscribed in a `size` square.
 
-    With ``n`` around 5 the curvature eases into the straight edges, instead of meeting
-    them at a tangent the way a rounded rectangle's circular arcs do.
+    Not a superellipse. The obvious implementation — `|x|^n + |y|^n = 1` with n
+    around 5 — is the shape most people mean by "squircle", but it is not the one
+    Apple uses, and the difference is visible: a superellipse curves continuously
+    everywhere, so the edges that should be flat bow outward. Side by side against
+    a real app icon it reads as pillowed.
+
+    Apple's mask is a *rounded rectangle with continuous curvature*, as produced by
+    `UIBezierPath(roundedRect:cornerRadius:)`: genuinely straight edges, with the
+    corner easing curvature in over a longer run than a circular arc would. This is
+    the construction Figma exposes as "corner smoothing", at the iOS values.
+
+    A circular corner is still wrong for the reason you would expect — curvature
+    jumps from 0 to 1/r at the join — but the fix is smoothing the transition, not
+    abandoning the straight edge.
     """
-    r = size / 2
-    points = []
-    for i in range(steps):
-        t = 2 * math.pi * i / steps
-        cos_t, sin_t = math.cos(t), math.sin(t)
-        x = math.copysign(abs(cos_t) ** (2 / n), cos_t)
-        y = math.copysign(abs(sin_t) ** (2 / n), sin_t)
-        points.append((r + x * r, r + y * r))
-    head = f"M{points[0][0]:.2f},{points[0][1]:.2f}"
-    return head + "".join(f"L{x:.2f},{y:.2f}" for x, y in points[1:]) + "Z"
+    radius = size * CORNER_RADIUS_RATIO
+    budget = size / 2
+
+    # Keep the corner inside the space available to it; without the cap a large
+    # radius yields a self-intersecting path rather than a clipped one.
+    smoothing = min(CORNER_SMOOTHING, budget / radius - 1)
+    p = min((1 + smoothing) * radius, budget)
+
+    arc_measure = math.radians(90 * (1 - smoothing))
+    arc = math.sin(arc_measure / 2) * radius * math.sqrt(2)
+
+    angle_alpha = (math.pi / 2 - arc_measure) / 2
+    angle_beta = math.radians(45 * smoothing)
+    c = radius * math.tan(angle_alpha / 2) * math.cos(angle_beta)
+    d = c * math.tan(angle_beta)
+
+    # The straight run into each corner splits 2:1 between the two off-curve
+    # control points. That ratio is what ramps curvature smoothly.
+    b = (p - arc - c - d) / 3
+    a = 2 * b
+
+    def f(value: float) -> str:
+        return f"{value:.4f}"
+
+    return " ".join(
+        [
+            f"M {f(size - p)} 0",
+            f"c {f(a)} 0 {f(a + b)} 0 {f(a + b + c)} {f(d)}",
+            f"a {f(radius)} {f(radius)} 0 0 1 {f(arc)} {f(arc)}",
+            f"c {f(d)} {f(c)} {f(d)} {f(b + c)} {f(d)} {f(a + b + c)}",
+            f"L {f(size)} {f(size - p)}",
+            f"c 0 {f(a)} 0 {f(a + b)} {f(-d)} {f(a + b + c)}",
+            f"a {f(radius)} {f(radius)} 0 0 1 {f(-arc)} {f(arc)}",
+            f"c {f(-c)} {f(d)} {f(-(b + c))} {f(d)} {f(-(a + b + c))} {f(d)}",
+            f"L {f(p)} {f(size)}",
+            f"c {f(-a)} 0 {f(-(a + b))} 0 {f(-(a + b + c))} {f(-d)}",
+            f"a {f(radius)} {f(radius)} 0 0 1 {f(-arc)} {f(-arc)}",
+            f"c {f(-d)} {f(-c)} {f(-d)} {f(-(b + c))} {f(-d)} {f(-(a + b + c))}",
+            f"L 0 {f(p)}",
+            f"c 0 {f(-a)} 0 {f(-(a + b))} {f(d)} {f(-(a + b + c))}",
+            f"a {f(radius)} {f(radius)} 0 0 1 {f(arc)} {f(-arc)}",
+            f"c {f(c)} {f(-d)} {f(b + c)} {f(-d)} {f(a + b + c)} {f(-d)}",
+            "Z",
+        ]
+    )
 
 
 def placement(correction: float = OPTICAL_CORRECTION) -> str:

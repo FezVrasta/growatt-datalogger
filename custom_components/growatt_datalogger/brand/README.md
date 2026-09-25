@@ -28,9 +28,7 @@ That needs `rsvg-convert` (`brew install librsvg`, `apt install librsvg2-bin`).
 
 ## Design
 
-An iOS-style squircle — a superellipse with exponent 5, so the curvature eases into the
-straight edges rather than meeting them at a tangent the way a rounded rectangle's
-circular arcs do — holding a leaf drawn as a neon tube.
+A squircle holding a leaf drawn as a neon tube. The squircle is the iOS app-icon shape: a rounded rectangle with continuous curvature, as `UIBezierPath(roundedRect:cornerRadius:)` draws it, with dead straight edges and corners that ease their curvature in. Not a superellipse, whose edges bow outward and read as pillowed next to a real app icon.
 
 The leaf is built from five passes: two wide blurred blooms, a tighter halo, a soft sheen,
 and a crisp near-white core. A single blur reads as a flat coloured smear; it is the white

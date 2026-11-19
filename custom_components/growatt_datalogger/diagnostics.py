@@ -13,6 +13,24 @@ from homeassistant.core import HomeAssistant
 
 from . import GrowattConfigEntry
 
+REDACTED = "**REDACTED**"
+
+
+def _scrub(value: Any, serials: set[str]) -> Any:
+    """Replace known serial numbers wherever they appear, including inside dict keys.
+
+    ``async_redact_data`` only looks at key names, but several dumps are keyed *by*
+    serial (``"logger:<serial>"``, ``"inverter:<serial>"``, ``profile_overrides``).
+    """
+    if isinstance(value, dict):
+        return {_scrub(key, serials): _scrub(item, serials) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_scrub(item, serials) for item in value]
+    if isinstance(value, str):
+        for serial in serials:
+            value = value.replace(serial, REDACTED)
+    return value
+
 #: Serial numbers identify a specific person's hardware, so they are redacted by default.
 TO_REDACT = {"serial", "serial_number", "datalogger", "inverter", "key", "parent"}
 
@@ -103,7 +121,10 @@ async def async_get_config_entry_diagnostics(
         },
     }
 
-    return async_redact_data(
+    serials = {device.serial for device in hub.devices.values() if device.serial}
+    serials |= {session.inverter_serial for session in hub.sessions if session.inverter_serial}
+
+    redacted = async_redact_data(
         {
             "port": hub.port,
             "coordinator_data": coordinator_data,
@@ -114,3 +135,4 @@ async def async_get_config_entry_diagnostics(
         },
         TO_REDACT,
     )
+    return _scrub(redacted, serials)
